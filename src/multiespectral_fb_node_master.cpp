@@ -9,63 +9,75 @@
 
 #include <ros/ros.h>
 #include <actionlib/server/simple_action_server.h>
-#include <actionlib_tutorials/MultiespectralAcquireAction.h>
+#include <multiespectral_fb/MultiespectralAcquisitionAction.h>
 
-class MultiespectralAcquireAction
+#include "camera_adapter.h"
+
+std::string IMAGE_PATH; 
+
+class MultiespectralAcquire
 {
 protected:
     ros::NodeHandle nh_;
-    actionlib::SimpleActionServer<actionlib_tutorials::MultiespectralAcquireAction> as_;
+    actionlib::SimpleActionServer<multiespectral_fb::MultiespectralAcquisitionAction> as_;
     std::string action_name_;
-    actionlib_tutorials::MultiespectralAcquireFeedback feedback_;
+    multiespectral_fb::MultiespectralAcquisitionFeedback feedback_;
 
 public:
 
-    MultiespectralAcquireAction(std::string name, int frame_rate) :
-        as_(nh_, name, boost::bind(&MultiespectralAcquireAction::executeCB, this, _1), false),
+    MultiespectralAcquire(std::string name, int frame_rate) :
+        as_(nh_, name, boost::bind(&MultiespectralAcquire::executeCB, this, _1), false),
         action_name_(name)
     {
         as_.start();
         bool result = initCamera(frame_rate);
         result = result | setAsMaster();
 
-        ROS_FATAL_STREAM_COND(!result, "[MultiespectralAcquireAction] Could not initialize " << getName() << " camera.");
+        ROS_FATAL_STREAM_COND(!result, "[MultiespectralMaster] Could not initialize " << getName() << " camera.");
+        if (!result) ros::shutdown();
     }
 
-    ~MultiespectralAcquireAction(void)
+    ~MultiespectralAcquire(void)
     {   
         bool result = closeCamera();
-        ROS_FATAL_STREAM_COND(!result, "[MultiespectralAcquireAction] Could finish correctly " << getName() << " camera.");
+        ROS_FATAL_STREAM_COND(!result, "[MultiespectralMaster] Could finish correctly " << getName() << " camera.");
     }
 
-    void executeCB(const actionlib_tutorials::MultiespectralAcquireGoalConstPtr &goal)
+    void executeCB(const multiespectral_fb::MultiespectralAcquisitionGoalConstPtr &goal)
     { 
         // init images acquired counter
         feedback_.images_acquired = 0;
 
         // helper variables
-        bool success = true;
+        bool result = true;
 
         // start image acquisition
+        cv::Mat curr_image;
         while(true)
         {
-            result =  result | acquireImage(cv::Mat& image);
-            ROS_ERROR_STREAM_COND(!result, "[MultiespectralAcquireAction::executeCB] Could not acquire image from " << getName() << " camera.");
+            result =  acquireImage(curr_image);
+            if (result) 
+            {
+                std::ostringstream filename;
+                filename << IMAGE_PATH << getType() << std::to_string(feedback_.images_acquired) << ".jpg";
+                cv::imwrite(filename.str().c_str(), curr_image);
+                
+                feedback_.images_acquired = feedback_.images_acquired + 1;
+            }
+            
+            ROS_ERROR_STREAM_COND(!result, "[MultiespectralMaster::executeCB] Could not acquire image from " << getName() << " camera.");
+            
             
             // check that preempt has not been requested by the client
             if (as_.isPreemptRequested() || !ros::ok())
             {
                 ROS_INFO("%s: Preempted", action_name_.c_str());
                 as_.setPreempted(); // set the action state to preempted
-                success = false;
                 break;
             }
 
-            feedback_.images_acquired = feedback_.images_acquired + 1;
             // publish the feedback
             as_.publishFeedback(feedback_);
-            // this sleep is not necessary, the sequence is computed at 1 Hz for demonstration purposes
-            r.sleep();
         }
     }
 };
@@ -73,19 +85,18 @@ public:
 
 int main(int argc, char** argv)
 {
-    ros::init(argc, argv, "MultiespectralAcquire");
+    ros::init(argc, argv, "MultiespectralMasterAcquire");
 
     /**
      * Prepare image folder
      */
-    std::string dataset_output_path;
     int frame_rate;
-    ros::param::param<std::string>("dataset_output_path", dataset_output_path, "./");
+    ros::param::param<std::string>("dataset_output_path", IMAGE_PATH, "./");
     ros::param::param<int>("frame_rate", frame_rate, 1);
 
 
-    MultiespectralAcquireAction MultiespectralAcquire("MultiespectralAcquire", frame_rate);
+    MultiespectralAcquire acquire_class("MultiespectralAcquire", frame_rate);
     ros::spin();
 
-    resulturn 0;
+    return 0;
 }

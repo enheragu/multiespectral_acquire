@@ -2,6 +2,7 @@
  * This file is a wrapper of Basler API for GeniCam camera acA 1600-60gc, exposes a common API to be wrapped into a
  * ROS node.
  */
+#include <memory>
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -12,15 +13,25 @@
 #include "BaslerCamera.h"
 #include "BaslerCameraArray.h"
 
+#include "camera_adapter.h"
+
 // Reference to basler camera to be handled
-Pylon::BaslerCamera& camera;
+std::unique_ptr<Pylon::BaslerCamera> pBasler;
 
 /**
  * @brief Get name of the camera for logging purposes
  */
 std::string getName()
 {
-    return "Basler acA1600-60gc"
+    return "Basler acA1600-60gc";
+}
+
+/**
+ * @brief Return image type to store it correctly
+ */
+std::string getType()
+{
+    return "visible";
 }
 
 /**
@@ -31,7 +42,7 @@ bool initCamera(int frame_rate)
 {
     // Before using any pylon methods, the pylon runtime must be initialized. 
     Pylon::PylonInitialize();
-    camera = Pylon::BaslerCamera(Pylon::CTlFactory::GetInstance().CreateFirstDevice());
+    pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(Pylon::CTlFactory::GetInstance().CreateFirstDevice()));
     return true;
 }
 
@@ -41,7 +52,7 @@ bool initCamera(int frame_rate)
  */
 bool setAsMaster()
 {
-
+    return true;   
 }
 
 /**
@@ -50,7 +61,7 @@ bool setAsMaster()
  */
 bool setAsSlave()
 {
-
+    return true;   
 }
 
 /**
@@ -60,33 +71,42 @@ bool setAsSlave()
  */
 bool acquireImage(cv::Mat& image)
 {
-    pBasler.StartGrabbing(1);
-    // This smart pointer will receive the grab result data.
-    Pylon::CGrabResultPtr ptrGrabResult;
-    cv::Mat openCvImage;
-
-    Pylon::CImageFormatConverter formatConverter;
-    formatConverter.OutputPixelFormat = Pylon::PixelType_BGR8packed;
-    Pylon::CPylonImage pylonImage;
-
-    // Wait for an image and then retrieve it. A timeout of 5000 ms is used.
-    pBasler.RetrieveResult( 5000, ptrGrabResult, Pylon::TimeoutHandling_ThrowException);
-    
-    // Image grabbed successfully?
-    if (ptrGrabResult->GrabSucceeded())
+    try
     {
-        // Access the image data.
-        std::cout << "SizeX: " << ptrGrabResult->GetWidth() << std::endl;
-        std::cout << "SizeY: " << ptrGrabResult->GetHeight() << std::endl;
-        const uint8_t *pImageBuffer = (uint8_t *) ptrGrabResult->GetBuffer();
-        std::cout << "Gray value of first pixel: " << (uint32_t) pImageBuffer[0]  << std::endl;
+        pBasler->StartGrabbing(1);
+        // This smart pointer will receive the grab result data.
+        Pylon::CGrabResultPtr ptrGrabResult;
+        cv::Mat openCvImage;
 
-        formatConverter.Convert(pylonImage, ptrGrabResult);
-        image = cv::Mat(ptrGrabResult->GetHeight(), ptrGrabResult->GetWidth(), CV_8UC3, (uint8_t *)pylonImage.GetBuffer());
+        Pylon::CImageFormatConverter formatConverter;
+        formatConverter.OutputPixelFormat = Pylon::PixelType_BGR8packed;
+        Pylon::CPylonImage pylonImage;
+
+        // Wait for an image and then retrieve it. A timeout of 5000 ms is used.
+        pBasler->RetrieveResult( 5000, ptrGrabResult, Pylon::TimeoutHandling_ThrowException);
+        
+        // Image grabbed successfully?
+        if (ptrGrabResult->GrabSucceeded())
+        {
+            // Access the image data.
+            std::cout << "SizeX: " << ptrGrabResult->GetWidth() << std::endl;
+            std::cout << "SizeY: " << ptrGrabResult->GetHeight() << std::endl;
+            const uint8_t *pImageBuffer = (uint8_t *) ptrGrabResult->GetBuffer();
+            std::cout << "Gray value of first pixel: " << (uint32_t) pImageBuffer[0]  << std::endl;
+
+            formatConverter.Convert(pylonImage, ptrGrabResult);
+            image = cv::Mat(ptrGrabResult->GetHeight(), ptrGrabResult->GetWidth(), CV_8UC3, (uint8_t *)pylonImage.GetBuffer());
+        }
+        else
+        {
+            std::cout << "Error: " << ptrGrabResult->GetErrorCode() << " " << ptrGrabResult->GetErrorDescription() << std::endl;
+            return false;
+        }
     }
-    else
+    catch (const Pylon::GenericException &e)
     {
-        std::cout << "Error: " << ptrGrabResult->GetErrorCode() << " " << ptrGrabResult->GetErrorDescription() << std::endl;
+        // Error handling.
+        std::cerr << "[BaslerAdapter::acquireImage] Pylon exception: " << e.GetDescription() << std::endl;
         return false;
     }
     return true;   
@@ -99,7 +119,7 @@ bool acquireImage(cv::Mat& image)
 bool closeCamera()
 {
     // Deinitialize Basler
-    camera.Close();
+    pBasler->Close();
 
     // Releases all pylon resources. 
     Pylon::PylonTerminate(); 
