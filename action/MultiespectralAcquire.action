@@ -1,0 +1,7 @@
+#goal definition
+---
+#result definition
+int32 images_acquired
+---
+#feedback
+int32 images_acquired
