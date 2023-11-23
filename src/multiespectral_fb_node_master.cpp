@@ -7,6 +7,11 @@
  *          triggered slave. Note that the action never ends once started unless preempted manually.
  */
 
+
+#include <signal.h>
+#include <memory>
+#include <filesystem>
+
 #include <ros/ros.h>
 #include <actionlib/server/simple_action_server.h>
 #include <multiespectral_fb/MultiespectralAcquisitionAction.h>
@@ -15,7 +20,10 @@
 
 std::string IMAGE_PATH; 
 
-class MultiespectralAcquire
+// class MultiespectralAcquire;
+// std::shared_ptr<MultiespectralAcquire> camera_handler_ptr;
+
+class MultiespectralAcquire : public MultiespectralAcquireT
 {
 protected:
     ros::NodeHandle nh_;
@@ -25,22 +33,21 @@ protected:
 
 public:
 
-    MultiespectralAcquire(std::string name, int frame_rate) :
+    MultiespectralAcquire(std::string name, std::string img_path) :
         as_(nh_, name, boost::bind(&MultiespectralAcquire::executeCB, this, _1), false),
-        action_name_(name)
+        action_name_(name),
+        MultiespectralAcquireT(img_path)
     {
         as_.start();
-        bool result = initCamera(frame_rate);
-        result = result | setAsMaster();
-
-        ROS_FATAL_STREAM_COND(!result, "[MultiespectralMaster] Could not initialize " << getName() << " camera.");
-        if (!result) ros::shutdown();
     }
 
-    ~MultiespectralAcquire(void)
-    {   
-        bool result = closeCamera();
-        ROS_FATAL_STREAM_COND(!result, "[MultiespectralMaster] Could finish correctly " << getName() << " camera.");
+    bool init(int frame_rate)
+    {
+        bool result = MultiespectralAcquireT::init(frame_rate);
+        result = result && setAsMaster();
+
+        ROS_FATAL_STREAM_COND(!result, "[MultiespectralMaster] Could not configure " << getName() << " camera as master.");
+        return result;
     }
 
     void executeCB(const multiespectral_fb::MultiespectralAcquisitionGoalConstPtr &goal)
@@ -53,20 +60,10 @@ public:
 
         // start image acquisition
         cv::Mat curr_image;
-        while(true)
+        while(ros::ok())
         {
-            result =  acquireImage(curr_image);
-            if (result) 
-            {
-                std::ostringstream filename;
-                filename << IMAGE_PATH << getType() << std::to_string(feedback_.images_acquired) << ".jpg";
-                cv::imwrite(filename.str().c_str(), curr_image);
-                
-                feedback_.images_acquired = feedback_.images_acquired + 1;
-            }
-            
-            ROS_ERROR_STREAM_COND(!result, "[MultiespectralMaster::executeCB] Could not acquire image from " << getName() << " camera.");
-            
+            result = this->grabStoreImage();
+            if (result) feedback_.images_acquired = feedback_.images_acquired + 1;
             
             // check that preempt has not been requested by the client
             if (as_.isPreemptRequested() || !ros::ok())
@@ -80,23 +77,32 @@ public:
             as_.publishFeedback(feedback_);
         }
     }
-};
+}; // End class MultiespectralAcquire
 
+
+void sigintHandler(int dummy)
+{
+    ROS_INFO_STREAM("SIGNIT recieved, exiting program.");
+    ros::shutdown();
+    // camera_handler_ptr.reset();
+}
 
 int main(int argc, char** argv)
 {
+    signal(SIGINT, sigintHandler);
     ros::init(argc, argv, "MultiespectralMasterAcquire");
 
-    /**
-     * Prepare image folder
-     */
     int frame_rate;
     ros::param::param<std::string>("dataset_output_path", IMAGE_PATH, "./");
     ros::param::param<int>("frame_rate", frame_rate, 1);
 
+    std::filesystem::create_directories(IMAGE_PATH+std::string("/")+getType());
 
-    MultiespectralAcquire acquire_class("MultiespectralAcquire", frame_rate);
-    ros::spin();
+    std::shared_ptr<MultiespectralAcquire> camera_handler_ptr;
+    camera_handler_ptr = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire", IMAGE_PATH);
+    bool result = camera_handler_ptr->init(frame_rate);
+    
+    if (result) ros::spin();
 
     return 0;
 }

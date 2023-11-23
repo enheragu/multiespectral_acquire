@@ -17,4 +17,18 @@ bool setAsSlave();
 bool acquireImage(cv::Mat& image);
 bool closeCamera();
 
+
+class MultiespectralAcquireT
+{
+protected:
+    int img_stored = 0;
+    std::string img_path = "";
+    std::mutex camera_mutex; // Avoid deinitialization while grabbing image
+public:
+    MultiespectralAcquireT(std::string img_path) : img_path(img_path) {}
+    ~MultiespectralAcquireT(void);
+    bool init(int frame_rate);
+    bool grabStoreImage();
+};
+
 #endif //CAMERA_ADAPTER_H

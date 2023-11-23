@@ -83,11 +83,11 @@ target_link_libraries( BaslerCamera PUBLIC pylon::pylon )
 ## Declare a C++ executable
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide
-add_executable(${PROJECT_NAME}_basler_master_node src/multiespectral_fb_node_master.cpp src/basler_adapter.cpp )
-add_executable(${PROJECT_NAME}_basler_slave_node src/multiespectral_fb_node_slave.cpp src/basler_adapter.cpp )
+add_executable(${PROJECT_NAME}_basler_master_node src/multiespectral_fb_node_master.cpp src/basler_adapter.cpp src/camera_adapter.cpp )
+add_executable(${PROJECT_NAME}_basler_slave_node src/multiespectral_fb_node_slave.cpp src/basler_adapter.cpp src/camera_adapter.cpp )
 
-add_executable(${PROJECT_NAME}_flir_master_node src/multiespectral_fb_node_master.cpp src/flir_adapter.cpp )
-add_executable(${PROJECT_NAME}_flir_slave_node src/multiespectral_fb_node_slave.cpp src/flir_adapter.cpp )
+add_executable(${PROJECT_NAME}_flir_master_node src/multiespectral_fb_node_master.cpp src/flir_adapter.cpp src/camera_adapter.cpp )
+add_executable(${PROJECT_NAME}_flir_slave_node src/multiespectral_fb_node_slave.cpp src/flir_adapter.cpp src/camera_adapter.cpp )
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the

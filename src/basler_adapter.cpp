@@ -40,10 +40,20 @@ std::string getType()
  */
 bool initCamera(int frame_rate)
 {
-    // Before using any pylon methods, the pylon runtime must be initialized. 
-    Pylon::PylonInitialize();
-    pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(Pylon::CTlFactory::GetInstance().CreateFirstDevice()));
-    return true;
+    try
+    {
+        // Before using any pylon methods, the pylon runtime must be initialized. 
+        Pylon::PylonInitialize();
+        pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(Pylon::CTlFactory::GetInstance().CreateFirstDevice()));
+
+        pBasler->StartGrabbing();
+        return true;
+    }
+    catch (const Pylon::GenericException &e)
+    {
+        std::cerr << "[BaslerAdapter::initCamera] Pylon exception: " << e.GetDescription() << std::endl;
+        return false;
+    }
 }
 
 /**
@@ -71,9 +81,13 @@ bool setAsSlave()
  */
 bool acquireImage(cv::Mat& image)
 {
+    if (!pBasler)
+    {
+            std::cout << "[BaslerAdapter::acquireImage] No camera pointer available." << std::endl;
+            return false;
+    }
     try
     {
-        pBasler->StartGrabbing(1);
         // This smart pointer will receive the grab result data.
         Pylon::CGrabResultPtr ptrGrabResult;
         cv::Mat openCvImage;
@@ -82,24 +96,27 @@ bool acquireImage(cv::Mat& image)
         formatConverter.OutputPixelFormat = Pylon::PixelType_BGR8packed;
         Pylon::CPylonImage pylonImage;
 
-        // Wait for an image and then retrieve it. A timeout of 5000 ms is used.
-        pBasler->RetrieveResult( 5000, ptrGrabResult, Pylon::TimeoutHandling_ThrowException);
+        // Wait for an image and then retrieve it. A timeout of 100 ms is used.
+        pBasler->RetrieveResult( 100, ptrGrabResult, Pylon::TimeoutHandling_ThrowException);
         
         // Image grabbed successfully?
+        if (!ptrGrabResult)
+        {
+            std::cout << "[BaslerAdapter::acquireImage] No grab result reference." << std::endl;
+            return false;
+        }
         if (ptrGrabResult->GrabSucceeded())
         {
             // Access the image data.
-            std::cout << "SizeX: " << ptrGrabResult->GetWidth() << std::endl;
-            std::cout << "SizeY: " << ptrGrabResult->GetHeight() << std::endl;
             const uint8_t *pImageBuffer = (uint8_t *) ptrGrabResult->GetBuffer();
-            std::cout << "Gray value of first pixel: " << (uint32_t) pImageBuffer[0]  << std::endl;
 
             formatConverter.Convert(pylonImage, ptrGrabResult);
-            image = cv::Mat(ptrGrabResult->GetHeight(), ptrGrabResult->GetWidth(), CV_8UC3, (uint8_t *)pylonImage.GetBuffer());
+            // needs to be cloned so to not keep pointing to local raw data that will be destroyed after function finishes
+            image = cv::Mat(ptrGrabResult->GetHeight(), ptrGrabResult->GetWidth(), CV_8UC3, (uint8_t *)pylonImage.GetBuffer()).clone();
         }
         else
         {
-            std::cout << "Error: " << ptrGrabResult->GetErrorCode() << " " << ptrGrabResult->GetErrorDescription() << std::endl;
+            std::cout << "[BaslerAdapter::acquireImage] Error: " << ptrGrabResult->GetErrorCode() << " " << ptrGrabResult->GetErrorDescription() << std::endl;
             return false;
         }
     }
@@ -118,8 +135,11 @@ bool acquireImage(cv::Mat& image)
  */
 bool closeCamera()
 {
+    std::cout << "[BaslerAdapter::closeCamera] Close camera requested." << std::endl;
     // Deinitialize Basler
+    pBasler->StopGrabbing();
     pBasler->Close();
+    pBasler.reset();
 
     // Releases all pylon resources. 
     Pylon::PylonTerminate(); 

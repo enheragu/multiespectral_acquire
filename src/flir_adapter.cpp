@@ -40,26 +40,44 @@ std::string getType()
  */
 bool initCamera(int frame_rate)
 {
+    bool result = false;
+    try
+    {
+        flir_system = Spinnaker::System::GetInstance();
 
-    bool result = true;
-    flir_system = Spinnaker::System::GetInstance();
+        flirCamList = flir_system->GetCameras();
+        if (flirCamList.GetSize()<=0)
+        {
+            std::cerr << "[FlirAdapter::initCamera] No cameras detected."  << std::endl;
+            return false;
+        }
+        pFlir = flirCamList.GetByIndex(0);
+        pFlir->Init();
 
-    Spinnaker::CameraList flirCamList = flir_system->GetCameras();
-    result = flirCamList.GetSize()>0?result:false;
+        // Single acquisition
+        Spinnaker::GenApi::INodeMap& nodeMap = pFlir->GetNodeMap();
+        Spinnaker::GenApi::CEnumerationPtr ptrAcquisitionMode = nodeMap.GetNode("AcquisitionMode");
+        if (!IsReadable(ptrAcquisitionMode) ||
+            !IsWritable(ptrAcquisitionMode))
+        {
+            std::cerr << "[FlirAdapter::initCamera] Unable to set acquisition mode. Node is not readable or writable. Aborting..." << std::endl;
+            return false;
+        }
+        
+        // TBD set aquisition mode correcly
+        Spinnaker::GenApi::CEnumEntryPtr ptrAcquisitionModeSingle = ptrAcquisitionMode->GetEntryByName("Continuous"); //SingleFrame");
+        const int64_t acquisitionModeSingle = ptrAcquisitionModeSingle->GetValue();
+        ptrAcquisitionMode->SetIntValue(acquisitionModeSingle);
 
-    pFlir = flirCamList.GetByIndex(0);
-    pFlir->Init();
-
-    // Single acquisition
-    Spinnaker::GenApi::INodeMap& nodeMap = pFlir->GetNodeMap();
-    Spinnaker::GenApi::CEnumerationPtr ptrAcquisitionMode = nodeMap.GetNode("AcquisitionMode");
-    Spinnaker::GenApi::CEnumEntryPtr ptrAcquisitionModeSingle = ptrAcquisitionMode->GetEntryByName("SingleFrame");
-    const int64_t acquisitionModeSingle = ptrAcquisitionModeSingle->GetValue();
-    ptrAcquisitionMode->SetIntValue(acquisitionModeSingle);
-
-    pFlir->BeginAcquisition();
-    flirCamList.Clear();
-
+        pFlir->BeginAcquisition();
+        result = true;
+    }
+    catch (Spinnaker::Exception& e)
+    {
+        // Error handling.
+        std::cerr << "[FlirAdapter::initCamera] Pylon exception: " << e.what() << std::endl;
+        return false;
+    }
     return result;
 }
 
@@ -88,24 +106,44 @@ bool setAsSlave()
  */
 bool acquireImage(cv::Mat& image)
 {
+    if (!pFlir)
+    {
+            std::cout << "[FlirAdapter::acquireImage] No camera pointer available." << std::endl;
+            return false;
+    }
+
+    bool result = true;
     try
     {
-        Spinnaker::ImagePtr pResultImage = pFlir->GetNextImage(1000);
-        unsigned int rows = pResultImage->GetHeight();
-        unsigned int cols = pResultImage->GetWidth();
-        unsigned int num_channels = pResultImage->GetNumChannels();
-        void *image_data = pResultImage->GetData();
-        unsigned int stride = pResultImage->GetStride();
-        image = cv::Mat(rows, cols, (num_channels == 3) ? CV_8UC3 : CV_8UC1, image_data, stride);
-        pResultImage->Release();
+        Spinnaker::ImagePtr pResultImage = pFlir->GetNextImage(100);
+        if (!pResultImage)
+        {
+            std::cout << "[FlirAdapter::acquireImage] No grab result reference." << std::endl;
+            return false;
+        }
+        if (pResultImage->IsIncomplete())
+        {
+            std::cerr << "[FlirAdapter::acquireImage] Image incomplete with image status " << pResultImage->GetImageStatus() << std::endl;
+            result =  false;
+        }
+        else
+        {
+            unsigned int rows = pResultImage->GetHeight();
+            unsigned int cols = pResultImage->GetWidth();
+            unsigned int num_channels = pResultImage->GetNumChannels();
+            void *image_data = pResultImage->GetData();
+            unsigned int stride = pResultImage->GetStride();
+            image = cv::Mat(rows, cols, (num_channels == 3) ? CV_8UC3 : CV_8UC1, image_data, stride);
+        }      
+        pResultImage->Release();  
     }
     catch (Spinnaker::Exception& e)
     {
         // Error handling.
-        std::cerr << "[FlirAdapter::acquireImage] Pylon exception: " << e.what() << std::endl;
+        std::cerr << "[FlirAdapter::acquireImage] Spinnaker exception: " << e.what() << std::endl;
         return false;
     }
-    return true;   
+    return result;   
 }
 
 /**
@@ -114,7 +152,18 @@ bool acquireImage(cv::Mat& image)
  */
 bool closeCamera()
 {
-    if (pFlir) { pFlir->DeInit();    pFlir = nullptr; }
+    std::cout << "[FlirAdapter::closeCamera] Close camera requested." << std::endl;
+    if (pFlir) 
+    { 
+        // std::cout << "[FlirAdapter::closeCamera] EndAcquisition." << std::endl;
+        if (pFlir->IsStreaming()) pFlir->EndAcquisition(); 
+        // std::cout << "[FlirAdapter::closeCamera] DeInit." << std::endl;
+        pFlir->DeInit();
+        // std::cout << "[FlirAdapter::closeCamera] Set to nullptr." << std::endl;
+        pFlir = nullptr;
+    }
+    flirCamList.Clear();
+    std::cout << "[FlirAdapter::closeCamera] Release system." << std::endl;
     flir_system->ReleaseInstance();
     return true;
 }
