@@ -30,7 +30,7 @@ bool MultiespectralAcquireT::grabStoreImage()
     if (result && !curr_image.empty()) 
     {
         std::ostringstream filename;
-        filename << img_path << "/" << getType() << "/" << std::to_string(img_stored) << ".jpg";
+        filename << img_path << "/" << std::to_string(img_stored) << ".jpg";
         cv::imwrite(filename.str().c_str(), curr_image);
         img_stored +=1;
     }

@@ -60,10 +60,12 @@ int main(int argc, char **argv)
     ros::param::param<std::string>("dataset_output_path", IMAGE_PATH, "./");
     ros::param::param<int>("frame_rate", frame_rate, 10);
 
-    std::filesystem::create_directories(IMAGE_PATH+std::string("/")+getType());
+    std::string path = IMAGE_PATH+std::string("/")+getType()+std::string("/");
+    std::filesystem::create_directories(path);
 
+    ROS_INFO_STREAM("Images will be stored in path: " << path);
     std::shared_ptr<MultiespectralAcquire> camera_handler_ptr;
-    camera_handler_ptr = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire", IMAGE_PATH);
+    camera_handler_ptr = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire", path);
     bool result = camera_handler_ptr->init(frame_rate);
    
     if (result) camera_handler_ptr->execute();
