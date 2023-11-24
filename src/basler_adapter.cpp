@@ -15,6 +15,28 @@
 
 #include "camera_adapter.h"
 
+// Check if available and readable and writable; and combinations of them
+#define CHECK_A(node){if (!IsAvailable(node)) \
+{ \
+    std::cout << "[BaslerAdapter::" << __func__ << "] " << #node << " is not available." << std::endl; \
+    return false; \
+}}
+#define CHECK_R(node){if (!IsReadable(node)) \
+{ \
+    std::cout << "[BaslerAdapter::" << __func__ << "] " << #node << " is not readable." << std::endl; \
+    return false; \
+}}
+#define CHECK_W(node){if (!IsWritable(node)) \
+{ \
+    std::cout << "[BaslerAdapter::" << __func__ << "] " << #node << " is not writable." << std::endl; \
+    return false; \
+}}
+#define CHECK_AR(node) {CHECK_A(node); CHECK_R(node); }
+#define CHECK_AW(node) {CHECK_A(node); CHECK_W(node); }
+#define CHECK_ARW(node) {CHECK_A(node); CHECK_R(node); CHECK_W(node); }
+
+
+
 // Reference to basler camera to be handled
 std::unique_ptr<Pylon::BaslerCamera> pBasler;
 
@@ -36,6 +58,7 @@ std::string getType()
 
 /**
  * @brief Function that handle all Pylon and Camera initializacion and configuration.
+ * @param frame_rate frames per second to capture with camera
  * @return true or false depending on image acquisition
  */
 bool initCamera(int frame_rate)
@@ -45,8 +68,11 @@ bool initCamera(int frame_rate)
         // Before using any pylon methods, the pylon runtime must be initialized. 
         Pylon::PylonInitialize();
         pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(Pylon::CTlFactory::GetInstance().CreateFirstDevice()));
+        pBasler->Open();
+        
+        pBasler->AcquisitionFrameRateEnable.SetValue(true);
+        pBasler->AcquisitionFrameRateAbs.SetValue(frame_rate);
 
-        pBasler->StartGrabbing();
         return true;
     }
     catch (const Pylon::GenericException &e)
@@ -57,11 +83,42 @@ bool initCamera(int frame_rate)
 }
 
 /**
+ * @brief Function that handle acquisition init. Note that it has to start after all configuration is set.
+ * @return true or false depending on image acquisition result
+ */
+bool beginAcquisition()
+{
+    pBasler->StartGrabbing();
+    return true;
+}
+
+
+/**
  * @brief Configure camera as Master to be synchronized through hardware trigger
  * @return true or false depending on image acquisition
  */
 bool setAsMaster()
 {
+    try
+    {
+        // Select Line 2 (output line)
+        CHECK_AW(pBasler->LineSelector);
+        pBasler->LineSelector.SetValue(Pylon::BaslerCameraCameraParams_Params::LineSelector_Out1);
+
+        // Set it as output
+        CHECK_AW(pBasler->LineMode);
+        pBasler->LineMode.SetValue(Pylon::BaslerCameraCameraParams_Params::LineMode_Output);
+
+        // Set the source signal to User Output 1
+        CHECK_AW(pBasler->LineSource);
+        pBasler->LineSource.SetValue(Pylon::BaslerCameraCameraParams_Params::LineSource_ExposureActive);
+    }
+    catch (const Pylon::GenericException &e)
+    {
+        // Error handling.
+        std::cerr << "[BaslerAdapter::setAsMaster] Pylon exception: " << e.GetDescription() << std::endl;
+        return false;
+    }
     return true;   
 }
 
@@ -71,7 +128,12 @@ bool setAsMaster()
  */
 bool setAsSlave()
 {
-    return true;   
+    std::cerr << "[BaslerAdapter::setAsSlave] ************************************" << std::endl;
+    std::cerr << "[BaslerAdapter::setAsSlave] * EMPTY FUNCTION. NOT IMPLEMENTED. *" << std::endl;
+    std::cerr << "[BaslerAdapter::setAsSlave] *  Calling setAsMaster() function  *" << std::endl;
+    std::cerr << "[BaslerAdapter::setAsSlave] ************************************" << std::endl;
+    bool result = setAsMaster();
+    return result;   
 }
 
 /**
@@ -96,8 +158,8 @@ bool acquireImage(cv::Mat& image)
         formatConverter.OutputPixelFormat = Pylon::PixelType_BGR8packed;
         Pylon::CPylonImage pylonImage;
 
-        // Wait for an image and then retrieve it. A timeout of 100 ms is used.
-        pBasler->RetrieveResult( 100, ptrGrabResult, Pylon::TimeoutHandling_ThrowException);
+        // Wait for an image and then retrieve it. A timeout of 1000 ms is used.
+        pBasler->RetrieveResult( 1000, ptrGrabResult, Pylon::TimeoutHandling_ThrowException);
         
         // Image grabbed successfully?
         if (!ptrGrabResult)

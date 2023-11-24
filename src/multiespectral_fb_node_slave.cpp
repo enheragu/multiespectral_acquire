@@ -26,7 +26,7 @@ public:
         ROS_INFO_STREAM_COND(result, "[MultiespectralAcquire::init] Initialized " << getName() << " camera as slave.");
 
         result = result && beginAcquisition();
-        
+
         return result;
     }
 
@@ -58,7 +58,7 @@ int main(int argc, char **argv)
 
     int frame_rate;
     ros::param::param<std::string>("dataset_output_path", IMAGE_PATH, "./");
-    ros::param::param<int>("frame_rate", frame_rate, 1);
+    ros::param::param<int>("frame_rate", frame_rate, 10);
 
     std::filesystem::create_directories(IMAGE_PATH+std::string("/")+getType());
 
