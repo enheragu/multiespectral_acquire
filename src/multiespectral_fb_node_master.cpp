@@ -46,7 +46,11 @@ public:
         bool result = MultiespectralAcquireT::init(frame_rate);
         result = result && setAsMaster();
 
-        ROS_FATAL_STREAM_COND(!result, "[MultiespectralMaster] Could not configure " << getName() << " camera as master.");
+        ROS_FATAL_STREAM_COND(!result, "[MultiespectralAcquire::init] Could not configure " << getName() << " camera as master.");
+        ROS_INFO_STREAM_COND(result, "[MultiespectralAcquire::init] Initialized " << getName() << " camera as master.");
+        
+        result = result && beginAcquisition();
+        
         return result;
     }
 
@@ -60,6 +64,7 @@ public:
 
         // start image acquisition
         cv::Mat curr_image;
+        ROS_INFO_STREAM("[MultiespectralAcquire::executeCB] Start image acquisition loop.");
         while(ros::ok())
         {
             result = this->grabStoreImage();

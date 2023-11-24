@@ -22,13 +22,18 @@ public:
         bool result = MultiespectralAcquireT::init(frame_rate);
         result = result && setAsSlave();
 
-        ROS_FATAL_STREAM_COND(!result, "[MultiespectralMaster] Could not configure " << getName() << " camera as slave.");
+        ROS_FATAL_STREAM_COND(!result, "[MultiespectralAcquire::init] Could not configure " << getName() << " camera as slave.");
+        ROS_INFO_STREAM_COND(result, "[MultiespectralAcquire::init] Initialized " << getName() << " camera as slave.");
+
+        result = result && beginAcquisition();
+        
         return result;
     }
 
     bool execute()
     {
         bool result = false;
+        ROS_INFO_STREAM("[MultiespectralAcquire::execute] Start image acquisition loop.");
         while (ros::ok())
         {
             result = this->grabStoreImage();

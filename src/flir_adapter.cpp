@@ -13,6 +13,27 @@
 
 #include "camera_adapter.h"
 
+
+// Check if available and readable and writable; and combinations of them
+#define CHECK_A(node){if (!IsAvailable(node)) \
+{ \
+    std::cout << "[FlirAdapter::" << __func__ << "] " << #node << " is not available." << std::endl; \
+    return false; \
+}}
+#define CHECK_R(node){if (!IsReadable(node)) \
+{ \
+    std::cout << "[FlirAdapter::" << __func__ << "] " << #node << " is not readable." << std::endl; \
+    return false; \
+}}
+#define CHECK_W(node){if (!IsWritable(node)) \
+{ \
+    std::cout << "[FlirAdapter::" << __func__ << "] " << #node << " is not writable." << std::endl; \
+    return false; \
+}}
+#define CHECK_AR(node) {CHECK_A(node); CHECK_R(node); }
+#define CHECK_AW(node) {CHECK_A(node); CHECK_W(node); }
+#define CHECK_ARW(node) {CHECK_A(node); CHECK_R(node); CHECK_W(node); }
+
 // Reference to Flir camera to be handled
 Spinnaker::CameraPtr pFlir = nullptr;
 Spinnaker::CameraList flirCamList;
@@ -54,22 +75,13 @@ bool initCamera(int frame_rate)
         pFlir = flirCamList.GetByIndex(0);
         pFlir->Init();
 
-        // Single acquisition
-        Spinnaker::GenApi::INodeMap& nodeMap = pFlir->GetNodeMap();
-        Spinnaker::GenApi::CEnumerationPtr ptrAcquisitionMode = nodeMap.GetNode("AcquisitionMode");
-        if (!IsReadable(ptrAcquisitionMode) ||
-            !IsWritable(ptrAcquisitionMode))
-        {
-            std::cerr << "[FlirAdapter::initCamera] Unable to set acquisition mode. Node is not readable or writable. Aborting..." << std::endl;
-            return false;
-        }
+        // Continuous Acquisition
+        CHECK_ARW(pFlir->AcquisitionMode);
+        pFlir->AcquisitionMode.SetValue(Spinnaker::AcquisitionMode_Continuous);
         
-        // TBD set aquisition mode correcly
-        Spinnaker::GenApi::CEnumEntryPtr ptrAcquisitionModeSingle = ptrAcquisitionMode->GetEntryByName("Continuous"); //SingleFrame");
-        const int64_t acquisitionModeSingle = ptrAcquisitionModeSingle->GetValue();
-        ptrAcquisitionMode->SetIntValue(acquisitionModeSingle);
+        // FRAME RATE HAS TO BE CONFIGURED THROUGH TRIGGERING, FLIR CAMERA WILL WORK AS AN SLAVE
+        // WITH FRAME RATE CONFIGURED IN MASTER CAMERA, BASLER
 
-        pFlir->BeginAcquisition();
         result = true;
     }
     catch (Spinnaker::Exception& e)
@@ -82,21 +94,82 @@ bool initCamera(int frame_rate)
 }
 
 /**
+ * @brief Function that handle acquisition init. Note that it has to start after all configuration is set.
+ * @return true or false depending on image acquisition result
+ */
+bool beginAcquisition()
+{
+    pFlir->BeginAcquisition();
+    return true;
+}
+
+/**
  * @brief Configure camera as Master to be synchronized through hardware trigger
  * @return true or false depending on image acquisition
  */
 bool setAsMaster()
 {
-    return true;   
-}
+    bool result = true;
+    try
+    {
+        // Set Line Selector to appropriate line (only necessary for non-BFS/BFLy cameras)
+        CHECK_AW(pFlir->LineSelector);    
+        pFlir->LineSelector.SetIntValue(Spinnaker::TriggerSource_Line2); // Pin 6 of I/O connector
+        std::cout << "[FlirAdapter::setAsMaster] Line Selector: " << pFlir->LineSelector.GetCurrentEntry()->GetSymbolic() << std::endl;
+
+        // Set Line Mode to Output
+        CHECK_AW(pFlir->LineMode);
+        pFlir->LineMode.SetIntValue(Spinnaker::LineMode_Output);
+
+        // Set Line Source to ExposureActive
+        CHECK_AW(pFlir->LineSource);
+        pFlir->LineSource.SetIntValue(Spinnaker::LineSource_ExposureActive);
+        std::cout << "[FlirAdapter::setAsMaster] Line Source: " << pFlir->LineSource.GetCurrentEntry()->GetSymbolic() << std::endl;
+
+    }
+    catch (Spinnaker::Exception& e)
+    {
+        std::cerr << "[FlirAdapter::setAsMaster] Exception: " << e.what() << std::endl;
+        result = false;
+    }
+    return result; 
+}   
+
 
 /**
  * @brief Configure camera as Slave to be synchronized through hardware trigger
  * @return true or false depending on image acquisition
  */
-bool setAsSlave()
+bool setAsSlave() 
 {
-    return true;   
+    // TBC is already set as slave by default?¿
+    bool result = true;
+    try
+    {        
+        // The trigger must be disabled in order to configure it again
+        CHECK_AW(pFlir->TriggerMode);
+        pFlir->TriggerMode.SetIntValue(Spinnaker::TriggerMode_On);
+
+        std::cout << "[FlirAdapter::setAsSlave] Trigger Mode: " << pFlir->TriggerMode.GetCurrentEntry()->GetSymbolic() << std::endl;
+
+        // The trigger source must be set to hardware or software while trigger mode is off.
+        CHECK_AW(pFlir->TriggerSource);
+        pFlir->TriggerSource.SetIntValue(Spinnaker::TriggerSource_Line1); // Pin 5 of I/O connector
+        
+        std::cout << "[FlirAdapter::setAsSlave] Trigger Source: " << pFlir->TriggerSource.GetCurrentEntry()->GetSymbolic() << std::endl;
+         
+        // Set Trigger Activation to Rising Edge -> Line 1 is always asserted on the rising edge.
+        // CHECK_AW(pFlir->TriggerActivation);
+        // pFlir->TriggerActivation.SetIntValue(Spinnaker::TriggerActivation_RisingEdge);
+        // std::cout << "[FlirAdapter::setAsSlave] Trigger Activation: " << pFlir->TriggerActivation.GetCurrentEntry()->GetSymbolic() << std::endl;
+    }
+    catch (Spinnaker::Exception& e)
+    {
+        std::cerr << "[FlirAdapter::setAsSlave] Exception: " << e.what() << std::endl;
+        result = false;
+    }
+
+    return result; 
 }
 
 /**
@@ -115,7 +188,7 @@ bool acquireImage(cv::Mat& image)
     bool result = true;
     try
     {
-        Spinnaker::ImagePtr pResultImage = pFlir->GetNextImage(100);
+        Spinnaker::ImagePtr pResultImage = pFlir->GetNextImage(1000);
         if (!pResultImage)
         {
             std::cout << "[FlirAdapter::acquireImage] No grab result reference." << std::endl;
@@ -140,8 +213,16 @@ bool acquireImage(cv::Mat& image)
     catch (Spinnaker::Exception& e)
     {
         // Error handling.
-        std::cerr << "[FlirAdapter::acquireImage] Spinnaker exception: " << e.what() << std::endl;
-        return false;
+        // Just empty buffer wont be considered an error
+        if (std::string(e.what()).find(std::string("Failed waiting for EventData on NEW_BUFFER_DATA event")) != std::string::npos)
+        {
+            std::cout << "[FlirAdapter::acquireImage] Empty buffer, no image to acquire." << std::endl;
+        }
+        else
+        {
+            std::cerr << "[FlirAdapter::acquireImage] Spinnaker exception: " << e.what() << std::endl;
+            return false;
+        }
     }
     return result;   
 }

@@ -12,6 +12,7 @@
 std::string getName();
 std::string getType();
 bool initCamera(int frame_rate);
+bool beginAcquisition();
 bool setAsMaster();
 bool setAsSlave();
 bool acquireImage(cv::Mat& image);
