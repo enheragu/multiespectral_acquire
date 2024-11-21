@@ -1,16 +1,23 @@
 
-<launch>	
-  <arg name="dataset_output_path" default="./"/>
-  <arg name="frame_rate" default="10"/>
+<launch>
 
-	<node pkg="multiespectral_fb" type="basler_master" name="basler_multiespectral" output="screen">
+    <arg name="dataset_output_path" default="/home/administrator/eeha_images"/>
+    <arg name="frame_rate" default="10"/>
+
+    <node pkg="multiespectral_fb" type="basler_master" name="basler_multiespectral" output="screen">
         <param name="dataset_output_path" value="$(arg dataset_output_path)"/>  
         <param name="frame_rate" value="$(arg frame_rate)"/>  
-	</node>
+    </node>
 
-	<node pkg="multiespectral_fb" type="flir_slave" name="flir_multiespectral" output="screen">
+    <node pkg="multiespectral_fb" type="flir_master" name="flir_multiespectral" output="screen">
         <param name="dataset_output_path" value="$(arg dataset_output_path)"/>  
         <param name="frame_rate" value="$(arg frame_rate)"/>  
-	</node>
+    </node>
+
+
+	<!-- <node pkg="multiespectral_fb" type="flir_slave" name="flir_multiespectral" output="screen">
+        <param name="dataset_output_path" value="$(arg dataset_output_path)"/>  
+        <param name="frame_rate" value="$(arg frame_rate)"/>  
+	</node> -->
 	
  </launch>

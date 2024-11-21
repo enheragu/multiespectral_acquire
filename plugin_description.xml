@@ -1,0 +1,5 @@
+<library path="lib/libaxclient_plugin">
+  <class name="AxClientPlugin" type="AxClientPlugin" base_class_type="rviz::Panel">
+    <description>Simple RViz Panel Plugin for axclient</description>
+  </class>
+</library>
