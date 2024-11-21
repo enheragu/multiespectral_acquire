@@ -25,7 +25,7 @@
     <!-- Author tags are optional, multiple are allowed, one per tag -->
     <!-- Authors do not have to be maintainers, but could be -->
     <!-- Example: -->
-    <!-- <author email="jane.doe@example.com">Jane Doe</author> -->
+    <author email="e.heredia@umh.es">Jane Doe</author>
 
 
     <!-- The *depend tags are used to specify dependencies -->
@@ -33,9 +33,17 @@
     <!-- Examples: -->
     <!-- Use depend as a shortcut for packages that are both build and exec dependencies -->
     <depend>roscpp</depend>
-    <depend>actionlib_msgs</depend>
+    <!-- <depend>rospy</depend> -->
     <depend>std_msgs</depend>
+    <depend>sensor_msgs</depend>
+    <depend>actionlib_msgs</depend>
+    <depend>actionlib</depend>
     <depend>rviz</depend>
+    <depend>cv_bridge</depend>
+    <depend>image_transport</depend>
+    <depend>pluginlib</depend>
+    
+    
     <!--   Note that this is equivalent to the following: -->
     <!--   <build_depend>roscpp</build_depend> -->
     <!--   <exec_depend>roscpp</exec_depend> -->
@@ -53,6 +61,8 @@
     <!--   <doc_depend>doxygen</doc_depend> -->
     <buildtool_depend>catkin</buildtool_depend>
 
+    <exec_depend>python-qt5</exec_depend>
+    <exec_depend>python-pyqt5</exec_depend>
 
     <!-- The export tag contains other, unspecified, tags -->
     <export>

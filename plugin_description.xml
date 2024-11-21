@@ -1,5 +1,5 @@
-<library path="lib/libaxclient_plugin">
-  <class name="AxClientPlugin" type="AxClientPlugin" base_class_type="rviz::Panel">
-    <description>Simple RViz Panel Plugin for axclient</description>
+<library path="lib/libMultiespectralPlugin">
+  <class name="MultiespectralPlugin" type="MultiespectralPlugin" base_class_type="rviz::Panel">
+    <description>Simple RViz Panel Plugin, provides an interface to command multiespectral camera (Based on this package) and to see images from them.</description>
   </class>
 </library>

@@ -9,12 +9,15 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin REQUIRED COMPONENTS actionlib_msgs roscpp actionlib
-                sensor_msgs
-                cv_bridge
-                image_transport
-                rviz
-                pluginlib
+find_package(catkin REQUIRED COMPONENTS 
+                    actionlib_msgs
+                    roscpp
+                    actionlib
+                    sensor_msgs
+                    cv_bridge
+                    image_transport
+                    rviz
+                    pluginlib
             )
 find_package(Qt5 REQUIRED COMPONENTS Widgets) # rviz plugin for cameras :)
 
@@ -50,10 +53,10 @@ generate_messages(
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
-#  INCLUDE_DIRS include
-#  LIBRARIES multiespectral_fb
-  CATKIN_DEPENDS actionlib_msgs roscpp
-#  DEPENDS system_lib
+  # INCLUDE_DIRS include
+  # LIBRARIES multiespectral_plugin
+  CATKIN_DEPENDS roscpp rviz actionlib image_transport cv_bridge pluginlib
+  #  DEPENDS system_lib
 )
 
 
@@ -123,11 +126,14 @@ target_link_libraries(${PROJECT_NAME}_flir_master_node ${catkin_LIBRARIES} ${Ope
 target_link_libraries(${PROJECT_NAME}_flir_slave_node ${catkin_LIBRARIES} ${OpenCV_LIBS} pthread dl Spinnaker::Spinnaker)
 
 
-
-
-add_definitions(${Qt5Widgets_DEFINITIONS})
-add_library(MultiespectralPlugin src/multiespectral_rviz_plugin.cpp) 
-target_link_libraries(MultiespectralPlugin ${catkin_LIBRARIES} Qt5::Widgets)
+ # Habilitar AUTOMOC 
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_INCLUDE_CURRENT_DIR ON)
+add_library(MultiespectralPlugin src/multiespectral_plugin.cpp)
+add_dependencies(MultiespectralPlugin ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(MultiespectralPlugin ${catkin_LIBRARIES} ${OpenCV_LIBS} Qt5::Widgets) 
+install(TARGETS MultiespectralPlugin LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION})
+install(FILES plugin_description.xml DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}) 
 
 #############
 ## Install ##
