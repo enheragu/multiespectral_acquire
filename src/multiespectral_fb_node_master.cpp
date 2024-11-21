@@ -113,7 +113,8 @@ void sigintHandler(int dummy)
 int main(int argc, char** argv)
 {
     signal(SIGINT, sigintHandler);
-    ros::init(argc, argv, "MultiespectralMasterAcquire");
+    ros::init(argc, argv, "MultiespectralMasterAcquire_" + getType());
+
 
     int frame_rate;
     ros::param::param<std::string>("/basler_multiespectral/dataset_output_path", IMAGE_PATH, "./");
@@ -124,7 +125,7 @@ int main(int argc, char** argv)
 
     ROS_INFO_STREAM("Images will be stored in path: " << path);
     std::shared_ptr<MultiespectralAcquire> camera_handler_ptr;
-    camera_handler_ptr = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire", path);
+    camera_handler_ptr = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire_" + getType(), path);
     bool result = camera_handler_ptr->init(frame_rate);
     
     if (result) ros::spin();
