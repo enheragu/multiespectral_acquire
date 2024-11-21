@@ -72,22 +72,37 @@ bool initCamera(int frame_rate)
             std::cerr << "[FlirAdapter::initCamera] No cameras detected."  << std::endl;
             return false;
         }
-        pFlir = flirCamList.GetByIndex(0);
+
+        std::cerr << "[FlirAdapter::initCamera] "<<flirCamList.GetSize()<<" cameras detected."  << std::endl;
+        // pFlir = flirCamList.GetByIndex(0);
+        pFlir = flirCamList.GetBySerial("M0000726");
         pFlir->Init();
 
         // Continuous Acquisition
         CHECK_ARW(pFlir->AcquisitionMode);
         pFlir->AcquisitionMode.SetValue(Spinnaker::AcquisitionMode_Continuous);
         
+        // No autoexposure in A68!
+        // Continuous auto exposure
+        // CHECK_ARW(pFlir->ExposureAuto);
+        // pFlir->ExposureAuto.SetValue(Spinnaker::ExposureAuto_Continuous);
+     
         // FRAME RATE HAS TO BE CONFIGURED THROUGH TRIGGERING, FLIR CAMERA WILL WORK AS AN SLAVE
         // WITH FRAME RATE CONFIGURED IN MASTER CAMERA, BASLER
+
+        // Buffer of images can get full, takes newest first each time
+        Spinnaker::GenApi::INodeMap& sNodeMap = pFlir->GetTLStreamNodeMap();
+        Spinnaker::GenApi::CEnumerationPtr ptrHandlingMode = sNodeMap.GetNode("StreamBufferHandlingMode");
+        CHECK_ARW(ptrHandlingMode);
+        Spinnaker::GenApi::CEnumEntryPtr ptrHandlingModeEntry = ptrHandlingMode->GetEntryByName("NewestOnly");
+        ptrHandlingMode->SetIntValue(ptrHandlingModeEntry->GetValue());
 
         result = true;
     }
     catch (Spinnaker::Exception& e)
     {
         // Error handling.
-        std::cerr << "[FlirAdapter::initCamera] Pylon exception: " << e.what() << std::endl;
+        std::cerr << "[FlirAdapter::initCamera] Spinnaker exception: " << e.what() << std::endl;
         return false;
     }
     return result;
@@ -109,6 +124,9 @@ bool beginAcquisition()
  */
 bool setAsMaster()
 {
+    std::cout << "[FlirAdapter::setAsMaster] NO MASTER SETUP FOR NOW IN FLIR" << std::endl;
+    return true;
+
     bool result = true;
     try
     {
@@ -201,6 +219,10 @@ bool acquireImage(cv::Mat& image)
         }
         else
         {
+            Spinnaker::ImageProcessor processor;
+            processor.SetColorProcessing(Spinnaker::SPINNAKER_COLOR_PROCESSING_ALGORITHM_HQ_LINEAR);
+            pResultImage = processor.Convert(pResultImage, Spinnaker::PixelFormat_Mono8);
+
             unsigned int rows = pResultImage->GetHeight();
             unsigned int cols = pResultImage->GetWidth();
             unsigned int num_channels = pResultImage->GetNumChannels();
@@ -228,7 +250,7 @@ bool acquireImage(cv::Mat& image)
 }
 
 /**
- * @brief Function that handle all camera de-initializacoin, port closing and Pylon clean finishing.
+ * @brief Function that handle all camera de-initializacoin, port closing and Spinnaker clean finishing.
  * @return true or false depending on image acquisition
  */
 bool closeCamera()

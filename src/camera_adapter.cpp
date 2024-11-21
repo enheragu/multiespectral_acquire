@@ -21,11 +21,10 @@ MultiespectralAcquireT::~MultiespectralAcquireT(void)
     ROS_INFO_STREAM_COND(result, "[MultiespectralAcquireT] Correctly finished " << getName() << " camera.");
 }
 
-bool MultiespectralAcquireT::grabStoreImage()
+bool MultiespectralAcquireT::grabStoreImage(cv::Mat& curr_image)
 {
 
     const std::scoped_lock<std::mutex> lock(camera_mutex);
-    cv::Mat curr_image;
     bool result =  acquireImage(curr_image);
     if (result && !curr_image.empty()) 
     {

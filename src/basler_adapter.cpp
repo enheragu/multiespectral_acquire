@@ -70,6 +70,11 @@ bool initCamera(int frame_rate)
         pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(Pylon::CTlFactory::GetInstance().CreateFirstDevice()));
         pBasler->Open();
         
+        // Enable Auto Exposure (set to Continuous mode)
+        CHECK_ARW(pBasler->ExposureAuto)
+        pBasler->ExposureAuto.SetIntValue(Pylon::BaslerCameraCameraParams_Params::ExposureAuto_Continuous);
+        std::cout << "[BaslerAdapter::initCamera] Autoexposure enabled in continuous mode." << std::endl;
+
         pBasler->AcquisitionFrameRateEnable.SetValue(true);
         pBasler->AcquisitionFrameRateAbs.SetValue(frame_rate);
 
