@@ -78,11 +78,13 @@ public:
             result = this->grabStoreImage(curr_image);
             if (result) 
             {
-                feedback_.images_acquired = feedback_.images_acquired + 1;
                 if (!curr_image.empty())
                 {
+                    feedback_.images_acquired = feedback_.images_acquired + 1;
                     // Convert to a sensor_msgs::Image message
-                    sensor_msgs::ImagePtr msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", curr_image).toImageMsg();
+                    std::string encodign = "bgr8";
+                    if (getType() == "lwir") {encodign = "mono8";}
+                    sensor_msgs::ImagePtr msg = cv_bridge::CvImage(std_msgs::Header(), encodign, curr_image).toImageMsg();
                     image_pub_.publish(msg);
                 }
 

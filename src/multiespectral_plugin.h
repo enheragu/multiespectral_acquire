@@ -47,8 +47,11 @@ private:
     QLabel* lwir_label;
     QLabel* rgb_label;
     QLabel* frequency_label;
+    QLabel* num_images_label;
     QVBoxLayout* layout;
     QHBoxLayout* controls_layout;
+    QHBoxLayout* images_layout;
+    QVBoxLayout* info_layout;
     QTimer* timer;
     QImage img_lwir;
     QImage img_rgb;
@@ -57,6 +60,8 @@ private:
     std::string rgb_topic;
     int lwir_frame_count;
     int rgb_frame_count;
+    int lwir_total_frame_count = 0;
+    int rgb_total_frame_count = 0;
     QTime frame_timer;
 };
 

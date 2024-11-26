@@ -1,0 +1,5 @@
+<launch>
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find multiespectral_fb)/rviz_conf/multiespectral_rviz.rviz" output="screen">
+        <param name="~logger_level" value="INFO"/>
+    </node>
+</launch>
