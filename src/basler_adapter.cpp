@@ -35,10 +35,16 @@
 #define CHECK_AW(node) {CHECK_A(node); CHECK_W(node); }
 #define CHECK_ARW(node) {CHECK_A(node); CHECK_R(node); CHECK_W(node); }
 
-
+#define CHECK_POINTER(pointer){if (!pointer) \
+{ \
+    std::cout << "[BaslerAdapter::" << __func__ << "] " << #pointer << " is not available." << std::endl; \
+    return false; \
+}}
 
 // Reference to basler camera to be handled
 std::unique_ptr<Pylon::BaslerCamera> pBasler;
+
+Pylon::String_t BASLER_IP = "169.254.165.5";
 
 /**
  * @brief Get name of the camera for logging purposes
@@ -67,7 +73,29 @@ bool initCamera(int frame_rate)
     {
         // Before using any pylon methods, the pylon runtime must be initialized. 
         Pylon::PylonInitialize();
-        pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(Pylon::CTlFactory::GetInstance().CreateFirstDevice()));
+        //Basler with IP: '192.168.4.5'
+        // This takes first abailable
+        // pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(Pylon::CTlFactory::GetInstance().CreateFirstDevice()));
+        
+        
+        // This access it by IP
+        Pylon::CTlFactory& tlFactory = Pylon::CTlFactory::GetInstance(); 
+        Pylon::CDeviceInfo info; 
+        info.SetDeviceClass(Pylon::BaslerGigEDeviceClass); 
+        info.SetIpAddress(BASLER_IP); 
+        Pylon::IPylonDevice* device = tlFactory.CreateDevice(info);
+        pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(device));
+
+        if (!pBasler)
+        {
+            std::cerr << "[BaslerAdapter::initCamera] Camera with configured IP ("<<BASLER_IP<<") was not found."  << std::endl;
+            return false;
+        }
+        else
+        {
+            std::cerr << "[BaslerAdapter::initCamera] Opening camera with IP ("<<BASLER_IP<<")."  << std::endl;
+        }
+
         pBasler->Open();
         
         // Enable Auto Exposure (set to Continuous mode)
@@ -93,6 +121,7 @@ bool initCamera(int frame_rate)
  */
 bool beginAcquisition()
 {
+    CHECK_POINTER(pBasler);
     pBasler->StartGrabbing();
     return true;
 }
@@ -104,6 +133,7 @@ bool beginAcquisition()
  */
 bool setAsMaster()
 {
+    CHECK_POINTER(pBasler);
     try
     {
         // Select Line 2 (output line)
@@ -133,6 +163,7 @@ bool setAsMaster()
  */
 bool setAsSlave()
 {
+    CHECK_POINTER(pBasler);
     std::cerr << "[BaslerAdapter::setAsSlave] ************************************" << std::endl;
     std::cerr << "[BaslerAdapter::setAsSlave] * EMPTY FUNCTION. NOT IMPLEMENTED. *" << std::endl;
     std::cerr << "[BaslerAdapter::setAsSlave] *  Calling setAsMaster() function  *" << std::endl;
@@ -148,11 +179,8 @@ bool setAsSlave()
  */
 bool acquireImage(cv::Mat& image)
 {
-    if (!pBasler)
-    {
-            std::cout << "[BaslerAdapter::acquireImage] No camera pointer available." << std::endl;
-            return false;
-    }
+    
+    CHECK_POINTER(pBasler);
     try
     {
         // This smart pointer will receive the grab result data.
@@ -204,9 +232,12 @@ bool closeCamera()
 {
     std::cout << "[BaslerAdapter::closeCamera] Close camera requested." << std::endl;
     // Deinitialize Basler
-    pBasler->StopGrabbing();
-    pBasler->Close();
-    pBasler.reset();
+    if (pBasler)
+    {
+        pBasler->StopGrabbing();
+        pBasler->Close();
+        pBasler.reset();
+    }
 
     // Releases all pylon resources. 
     Pylon::PylonTerminate(); 

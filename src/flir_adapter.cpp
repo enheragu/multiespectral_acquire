@@ -3,6 +3,8 @@
  * ROS node.
  */
 
+#include <thread>
+
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
@@ -34,10 +36,18 @@
 #define CHECK_AW(node) {CHECK_A(node); CHECK_W(node); }
 #define CHECK_ARW(node) {CHECK_A(node); CHECK_R(node); CHECK_W(node); }
 
+#define CHECK_POINTER(pointer){if (!pointer) \
+{ \
+    std::cout << "[FlirAdapter::" << __func__ << "] " << #pointer << " is not available." << std::endl; \
+    return false; \
+}}
+
 // Reference to Flir camera to be handled
 Spinnaker::CameraPtr pFlir = nullptr;
 Spinnaker::CameraList flirCamList;
 Spinnaker::SystemPtr flir_system;
+
+std::string FLIR_IP = "169.254.165.138";
 
 /**
  * @brief Get name of the camera for logging purposes
@@ -56,32 +66,133 @@ std::string getType()
 }
 
 /**
+ * @brief Helper function to convert IP Address to dotted format
+ *        extracted from Pylon examplaes
+ */
+std::string GetDottedAddress(int64_t value)
+{
+    unsigned int inputValue = static_cast<unsigned int>(value);
+    std::ostringstream convertValue;
+    convertValue << ((inputValue & 0xFF000000) >> 24);
+    convertValue << ".";
+    convertValue << ((inputValue & 0x00FF0000) >> 16);
+    convertValue << ".";
+    convertValue << ((inputValue & 0x0000FF00) >> 8);
+    convertValue << ".";
+    convertValue << (inputValue & 0x000000FF);
+    return convertValue.str().c_str();
+}
+
+
+
+/**
+ * @brief This function configures GigE cameras discovered to an IP configuration that will work with Spinnaker.
+ *        Configures from specific interface and camera index.
+ * @param interface_n Interface index to configure.
+ */
+bool AutoConfigureFlirCamera(int interface_n = 1, int camera_index = 0)
+{
+    Spinnaker::SystemPtr pSystem = Spinnaker::System::GetInstance();
+    std::cout << "[FlirAdapter::AutoConfigure] Setting all GigE cameras discovered from interface " << interface_n << " to an IP configuration that will work with Spinnaker:" << std::endl;
+
+    Spinnaker::InterfaceList interfaceList = pSystem->GetInterfaces();
+    unsigned int interfaceCount = interfaceList.GetSize();
+    { // otro ambito para estas variables
+        Spinnaker::InterfacePtr pInterface = interfaceList.GetByIndex(interface_n);
+        Spinnaker::GenApi::INodeMap& nodeMapInterface = pInterface->GetTLNodeMap();
+        Spinnaker::GenApi::CEnumerationPtr ptrInterfaceType = nodeMapInterface.GetNode("InterfaceType");
+        CHECK_AR(ptrInterfaceType);
+
+        if (ptrInterfaceType->GetIntValue() != Spinnaker::InterfaceType_GigEVision)
+        {
+            std::cout << "[FlirAdapter::AutoConfigure] Interface is not a GigE Vision interface. Only forces on GigE interfaces sorryn't." << std::endl;
+            return false; // Only force IP on GEV interface
+        }
+        if(pInterface->GetCameras().GetSize() == 0) 
+        {
+            std::cout << "[FlirAdapter::AutoConfigure] Force IP node not available for this interface (e.g. No Gige Cameras are connected to this interface)." << std::endl;
+            return false;
+        }
+
+        Spinnaker::GenApi::CStringPtr ptrInterfaceDisplayName = nodeMapInterface.GetNode("InterfaceDisplayName");
+        Spinnaker::GenICam::gcstring interfaceDisplayName = "Unknown Interface (Display name not readable)";
+        CHECK_AR(ptrInterfaceDisplayName);
+        std::cout << "[FlirAdapter::AutoConfigure] *** " << ptrInterfaceDisplayName->GetValue() << " ***" << std::endl;
+
+
+        CHECK_AR(nodeMapInterface.GetNode("GevDeviceAutoForceIP"));
+        CHECK_AR(pInterface->TLInterface.DeviceSelector.GetAccessMode());
+        pInterface->TLInterface.DeviceSelector.SetValue(camera_index);
+        pInterface->TLInterface.GevDeviceAutoForceIP.Execute();
+        std::cout << "[FlirAdapter::AutoConfigure] AutoForceIP executed for camera at index " << camera_index << ", serial number: " << pInterface->TLInterface.DeviceSerialNumber.GetValue() << std::endl;
+    }
+    interfaceList.Clear();
+    pSystem->ReleaseInstance();
+
+    std::cout << "[FlirAdapter::AutoConfigure] Auto-configuration complete. Waiting for camera to be available again." << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+    return true;
+}
+
+
+/**
  * @brief Function that handle all Basler initializacion and configuration.
  * @return true or false depending on image acquisition
  */
 bool initCamera(int frame_rate)
-{
+{   
+    // Reste cameras to a IP range compatible
+    // AutoConfigureFlirCamera();
+
+    flir_system = Spinnaker::System::GetInstance();
+
     bool result = false;
+    flirCamList = flir_system->GetCameras();
+    if (flirCamList.GetSize()<=0)
+    {
+        std::cerr << "[FlirAdapter::initCamera] No cameras detected."  << std::endl;
+        return false;
+    }
+
+    std::cerr << "[FlirAdapter::initCamera] "<<flirCamList.GetSize()<<" cameras detected."  << std::endl;
+        
+    // for (unsigned int i = 0; i < flirCamList.GetSize(); i++)
+    // {
+    //     try
+    //     {
+    //         pFlir = flirCamList.GetByIndex(i);
+    //         pFlir->Init();
+    //         break;
+    //     }
+    //     catch (Spinnaker::Exception& e)
+    //     {
+    //         // Error handling.
+    //         std::cerr << "[FlirAdapter::initCamera] Coulnd not init camera with index: "<<i<<" " << e.what() << std::endl;
+    //     }
+    // }
+
     try
     {
-        flir_system = Spinnaker::System::GetInstance();
-
-        flirCamList = flir_system->GetCameras();
-        if (flirCamList.GetSize()<=0)
-        {
-            std::cerr << "[FlirAdapter::initCamera] No cameras detected."  << std::endl;
-            return false;
-        }
-
-        std::cerr << "[FlirAdapter::initCamera] "<<flirCamList.GetSize()<<" cameras detected."  << std::endl;
         // pFlir = flirCamList.GetByIndex(0);
         pFlir = flirCamList.GetBySerial("M0000726");
+        CHECK_POINTER(pFlir);
         pFlir->Init();
 
         // Continuous Acquisition
-        CHECK_ARW(pFlir->AcquisitionMode);
-        pFlir->AcquisitionMode.SetValue(Spinnaker::AcquisitionMode_Continuous);
-        
+        // CHECK_ARW(pFlir->AcquisitionMode);
+        // pFlir->AcquisitionMode.SetValue(Spinnaker::AcquisitionMode_Continuous);
+
+        Spinnaker::GenApi::INodeMap& nodeMap = pFlir->GetNodeMap();
+        Spinnaker::GenApi::CEnumerationPtr ptrAcquisitionMode = nodeMap.GetNode("AcquisitionMode");
+        CHECK_ARW(ptrAcquisitionMode);
+        Spinnaker::GenApi::CEnumEntryPtr ptrAcquisitionModeContinuous = ptrAcquisitionMode->GetEntryByName("Continuous");
+        CHECK_AR(ptrAcquisitionModeContinuous);
+        const int64_t acquisitionModeContinuous = ptrAcquisitionModeContinuous->GetValue();
+        ptrAcquisitionMode->SetIntValue(acquisitionModeContinuous);
+
+        std::cout << "[FlirAdapter::initCamera] Acquisition mode set to continuous..." << std::endl;
+
+
         // No autoexposure in A68!
         // Continuous auto exposure
         // CHECK_ARW(pFlir->ExposureAuto);
@@ -98,6 +209,7 @@ bool initCamera(int frame_rate)
         ptrHandlingMode->SetIntValue(ptrHandlingModeEntry->GetValue());
 
         result = true;
+
     }
     catch (Spinnaker::Exception& e)
     {
@@ -114,7 +226,17 @@ bool initCamera(int frame_rate)
  */
 bool beginAcquisition()
 {
-    pFlir->BeginAcquisition();
+    CHECK_POINTER(pFlir);
+
+    if (pFlir->IsStreaming() == false)
+    {
+        std::cout << "[FlirAdapter::beginAcquisition] Starting acquisition." << std::endl;
+        pFlir->BeginAcquisition();
+    }
+    else
+    {
+        std::cout << "[FlirAdapter::beginAcquisition] Acquisition already started." << std::endl;
+    }
     return true;
 }
 
@@ -124,6 +246,9 @@ bool beginAcquisition()
  */
 bool setAsMaster()
 {
+    
+    CHECK_POINTER(pFlir);
+
     std::cout << "[FlirAdapter::setAsMaster] NO MASTER SETUP FOR NOW IN FLIR" << std::endl;
     return true;
 
@@ -160,6 +285,9 @@ bool setAsMaster()
  */
 bool setAsSlave() 
 {
+    
+    CHECK_POINTER(pFlir);
+
     // TBC is already set as slave by default?¿
     bool result = true;
     try
@@ -197,16 +325,13 @@ bool setAsSlave()
  */
 bool acquireImage(cv::Mat& image)
 {
-    if (!pFlir)
-    {
-            std::cout << "[FlirAdapter::acquireImage] No camera pointer available." << std::endl;
-            return false;
-    }
-
+    CHECK_POINTER(pFlir);
     bool result = true;
+
+    Spinnaker::ImagePtr pResultImage = nullptr;
     try
     {
-        Spinnaker::ImagePtr pResultImage = pFlir->GetNextImage(1000);
+        pResultImage = pFlir->GetNextImage(10000);
         if (!pResultImage)
         {
             std::cout << "[FlirAdapter::acquireImage] No grab result reference." << std::endl;
@@ -221,19 +346,21 @@ bool acquireImage(cv::Mat& image)
         {
             Spinnaker::ImageProcessor processor;
             processor.SetColorProcessing(Spinnaker::SPINNAKER_COLOR_PROCESSING_ALGORITHM_HQ_LINEAR);
-            pResultImage = processor.Convert(pResultImage, Spinnaker::PixelFormat_Mono8);
+            Spinnaker::ImagePtr convertedImage = processor.Convert(pResultImage, Spinnaker::PixelFormat_Mono8);
 
-            unsigned int rows = pResultImage->GetHeight();
-            unsigned int cols = pResultImage->GetWidth();
-            unsigned int num_channels = pResultImage->GetNumChannels();
-            void *image_data = pResultImage->GetData();
-            unsigned int stride = pResultImage->GetStride();
+            unsigned int rows = convertedImage->GetHeight();
+            unsigned int cols = convertedImage->GetWidth();
+            unsigned int num_channels = convertedImage->GetNumChannels();
+            void *image_data = convertedImage->GetData();
+            unsigned int stride = convertedImage->GetStride();
             image = cv::Mat(rows, cols, (num_channels == 3) ? CV_8UC3 : CV_8UC1, image_data, stride);
         }      
         pResultImage->Release();  
     }
     catch (Spinnaker::Exception& e)
     {
+        if (pResultImage) {pResultImage->Release();}
+
         // Error handling.
         // Just empty buffer wont be considered an error
         if (std::string(e.what()).find(std::string("Failed waiting for EventData on NEW_BUFFER_DATA event")) != std::string::npos)
