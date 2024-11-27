@@ -241,6 +241,24 @@ bool beginAcquisition()
 }
 
 /**
+ * @brief Function that handle acquisition end.
+ */
+bool endAcquisition()
+{
+    CHECK_POINTER(pFlir);
+    if (pFlir->IsStreaming())
+    {
+        std::cout << "[FlirAdapter::beginAcquisition] End acquisition." << std::endl;
+        pFlir->EndAcquisition();
+    }
+    else
+    {
+        std::cout << "[FlirAdapter::beginAcquisition] Acquisition is not running." << std::endl;
+    }
+    return true;
+}
+
+/**
  * @brief Configure camera as Master to be synchronized through hardware trigger
  * @return true or false depending on image acquisition
  */
@@ -386,7 +404,7 @@ bool closeCamera()
     if (pFlir) 
     { 
         // std::cout << "[FlirAdapter::closeCamera] EndAcquisition." << std::endl;
-        if (pFlir->IsStreaming()) pFlir->EndAcquisition(); 
+        endAcquisition();
         // std::cout << "[FlirAdapter::closeCamera] DeInit." << std::endl;
         pFlir->DeInit();
         // std::cout << "[FlirAdapter::closeCamera] Set to nullptr." << std::endl;

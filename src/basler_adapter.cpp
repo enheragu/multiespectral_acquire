@@ -126,6 +126,15 @@ bool beginAcquisition()
     return true;
 }
 
+/**
+ * @brief Function that handle acquisition end.
+ */
+bool endAcquisition()
+{
+    CHECK_POINTER(pBasler);
+    pBasler->StopGrabbing();
+    return true;
+}
 
 /**
  * @brief Configure camera as Master to be synchronized through hardware trigger
@@ -234,7 +243,7 @@ bool closeCamera()
     // Deinitialize Basler
     if (pBasler)
     {
-        pBasler->StopGrabbing();
+        endAcquisition();
         pBasler->Close();
         pBasler.reset();
     }

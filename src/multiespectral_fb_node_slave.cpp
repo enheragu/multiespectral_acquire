@@ -6,10 +6,6 @@
 
 #include "ros/ros.h"
 
-#include <sensor_msgs/Image.h>
-#include <cv_bridge/cv_bridge.h>
-#include <image_transport/image_transport.h>
-
 #include "camera_adapter.h"
 std::string IMAGE_PATH; 
 
@@ -19,15 +15,9 @@ std::string IMAGE_PATH;
 class MultiespectralAcquire : public MultiespectralAcquireT
 {
 private:
-    ros::NodeHandle nh_;
-    image_transport::Publisher image_pub_;
 
 public:
-    MultiespectralAcquire(std::string name, std::string img_path): MultiespectralAcquireT(img_path) 
-    {
-        image_transport::ImageTransport it(nh_);
-        image_pub_ = it.advertise(getType()+"_image", 1);
-    }
+    MultiespectralAcquire(std::string name, std::string img_path): MultiespectralAcquireT(img_path) {    }
 
     bool init(int frame_rate)
     {
@@ -41,7 +31,7 @@ public:
 
         return result;
     }
-
+    
     bool execute()
     {
         bool result = false;
@@ -50,14 +40,6 @@ public:
         {
             cv::Mat curr_image;
             result = this->grabStoreImage(curr_image);
-
-            if (result && !curr_image.empty())
-            {
-                // Convert to a sensor_msgs::Image message
-                sensor_msgs::ImagePtr msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", curr_image).toImageMsg();
-                image_pub_.publish(msg);
-            }
-
             ros::spinOnce();
         }
         return result;
@@ -78,8 +60,8 @@ int main(int argc, char **argv)
     ros::init(argc, argv, "MultiespectralSlaveAcquire_" + getType());
 
     int frame_rate;
-    ros::param::param<std::string>("/basler_multiespectral/dataset_output_path", IMAGE_PATH, "./");
-    ros::param::param<int>("/basler_multiespectral/frame_rate", frame_rate, 10);
+    ros::param::param<std::string>("~dataset_output_path", IMAGE_PATH, "./");
+    ros::param::param<int>("~frame_rate", frame_rate, 10);
 
     std::string path = IMAGE_PATH+std::string("/")+getType()+std::string("/");
     std::filesystem::create_directories(path);
