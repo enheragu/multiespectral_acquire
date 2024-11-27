@@ -68,6 +68,8 @@ MultiespectralPlugin::MultiespectralPlugin(QWidget* parent)
     connect(timer, &QTimer::timeout, this, &MultiespectralPlugin::updateImages);
     timer->start(1000 / 1); // Actualización a 30 FPS
     frame_timer.start();
+
+    connect(this, &MultiespectralPlugin::imageReceived, this, &MultiespectralPlugin::updateImages);
 }
 
 
@@ -94,53 +96,71 @@ void MultiespectralPlugin::cancelGoal()
     ROS_INFO("Goal cancelled to both AC.");
 }
 
+// Función para convertir cv::Mat a QImage
+QImage MatToQImage(const cv::Mat& mat) {
+    switch (mat.type()) {
+        // 8-bit, 4 channel
+        case CV_8UC4: {
+            QImage image(mat.data, mat.cols, mat.rows, static_cast<int>(mat.step), QImage::Format_ARGB32);
+            return image.copy();
+        }
 
-void handleImageCallback(const sensor_msgs::ImageConstPtr& msg, QImage& image)
-{
-    try
-    {
-        // Manejar la imagen según su codificación
-        cv_bridge::CvImagePtr cv_ptr;
-        if (msg->encoding == sensor_msgs::image_encodings::BGR8)
-        {
-            // Verificar si la imagen está mal formada
-            if (msg->step != msg->width * 3)
-            {
-                ROS_ERROR("Image is wrongly formed: step (%d) != calculated step (%d).", msg->step, msg->width * 3);
-                return;
-            }
-            cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+        // 8-bit, 3 channel
+        case CV_8UC3: {
+            QImage image(mat.data, mat.cols, mat.rows, static_cast<int>(mat.step), QImage::Format_RGB888);
+            return image.rgbSwapped();
         }
-        else if (msg->encoding == sensor_msgs::image_encodings::RGB8)
-        {
+
+        // 8-bit, 1 channel
+        case CV_8UC1: {
+            QImage image(mat.data, mat.cols, mat.rows, static_cast<int>(mat.step), QImage::Format_Grayscale8);
+            return image.copy();
+        }
+
+        default:
+            std::cerr << "Unsupported cv::Mat type: " << mat.type() << std::endl;
+            break;
+    }
+    return QImage();
+}
+
+
+void handleImageCallback(const sensor_msgs::ImageConstPtr& msg, QImage& image) {
+    image = QImage(); // Reiniciar la imagen anterior con una nueva imagen vacía
+    cv_bridge::CvImagePtr cv_ptr;
+    try {
+        if (msg->encoding == sensor_msgs::image_encodings::RGB8) {
             cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::RGB8);
-            cv::cvtColor(cv_ptr->image, cv_ptr->image, cv::COLOR_RGB2BGR);
-        }
-        else if (msg->encoding == sensor_msgs::image_encodings::MONO8)
-        {
+            ROS_INFO("Image encoding: RGB8");
+        } else if (msg->encoding == sensor_msgs::image_encodings::BGR8) {
+            cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+            ROS_INFO("Image encoding: BGR8");
+        } else if (msg->encoding == sensor_msgs::image_encodings::MONO8) {
             cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::MONO8);
-            cv::cvtColor(cv_ptr->image, cv_ptr->image, cv::COLOR_GRAY2BGR);
-        }
-        else
-        {
-            ROS_ERROR("Unsupported encoding: %s", msg->encoding.c_str());
+            ROS_INFO("Image encoding: MONO8");
+        } else {
+            std::cerr << "Unsupported image encoding: " << msg->encoding << std::endl;
             return;
         }
-
-        // Convertir cv::Mat a QImage
-        image = QImage(cv_ptr->image.data, cv_ptr->image.cols, cv_ptr->image.rows, QImage::Format_RGB888).rgbSwapped();
+    } catch (cv_bridge::Exception& e) {
+        std::cerr << "cv_bridge exception: " << e.what() << std::endl;
+        return;
     }
-    catch (cv_bridge::Exception& e)
-    {
-        ROS_ERROR("cv_bridge exception: %s", e.what());
+    image = MatToQImage(cv_ptr->image);
+    if (image.isNull()) {
+        ROS_WARN("Failed to convert cv::Mat to QImage");
+        return;
     }
+    ROS_INFO("Successfully converted cv::Mat to QImage");
 }
+
 
 void MultiespectralPlugin::imageCallbackLWIR(const sensor_msgs::ImageConstPtr &msg)
 {
     lwir_frame_count++;
     lwir_total_frame_count++;
     handleImageCallback(msg, img_lwir);
+    QMetaObject::invokeMethod(this, "updateImages", Qt::QueuedConnection);
 }
 
 void MultiespectralPlugin::imageCallbackRGB(const sensor_msgs::ImageConstPtr &msg)
@@ -148,9 +168,8 @@ void MultiespectralPlugin::imageCallbackRGB(const sensor_msgs::ImageConstPtr &ms
     rgb_frame_count++;
     rgb_total_frame_count++;
     handleImageCallback(msg, img_rgb);
+    QMetaObject::invokeMethod(this, "updateImages", Qt::QueuedConnection);
 }
-
-
 
 void MultiespectralPlugin::initializeImages()
 {
@@ -158,7 +177,7 @@ void MultiespectralPlugin::initializeImages()
     img_lwir.fill(Qt::black);
     lwir_label->setPixmap(QPixmap::fromImage(img_lwir.scaled(lwir_label->size(), Qt::KeepAspectRatio)));
 
-    img_rgb = QImage(640, 480, QImage::Format_RGB888);
+    img_rgb = QImage(640, 480, QImage::Format_Grayscale8);
     img_rgb.fill(Qt::black);
     rgb_label->setPixmap(QPixmap::fromImage(img_rgb.scaled(rgb_label->size(), Qt::KeepAspectRatio)));
 }
@@ -175,9 +194,9 @@ void MultiespectralPlugin::updateImages()
     frequency_label->setText(QString("LWIR freq.: %1 FPS \t| RGB freq.: %2 FPS")
                                  .arg(lwir_frequency, 0, 'f', 2)
                                  .arg(rgb_frequency, 0, 'f', 2));
-    num_images_label->setText(QString("LWIR Images: %1  \t| RGB Images.: %2 FPS")
-                                  .arg(lwir_total_frame_count, 0, 'f', 2)
-                                  .arg(rgb_total_frame_count, 0, 'f', 2));
+    num_images_label->setText(QString("LWIR Images: %1  \t| RGB Images.: %2 ")
+                                  .arg(lwir_total_frame_count)
+                                  .arg(rgb_total_frame_count)); 
 
     // Reiniciar el contador de frames y el temporizador
     lwir_frame_count = 0;

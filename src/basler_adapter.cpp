@@ -75,16 +75,16 @@ bool initCamera(int frame_rate)
         Pylon::PylonInitialize();
         //Basler with IP: '192.168.4.5'
         // This takes first abailable
-        // pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(Pylon::CTlFactory::GetInstance().CreateFirstDevice()));
+        pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(Pylon::CTlFactory::GetInstance().CreateFirstDevice()));
         
-        
+        // Not working :( creates camera that cannot get images
         // This access it by IP
-        Pylon::CTlFactory& tlFactory = Pylon::CTlFactory::GetInstance(); 
-        Pylon::CDeviceInfo info; 
-        info.SetDeviceClass(Pylon::BaslerGigEDeviceClass); 
-        info.SetIpAddress(BASLER_IP); 
-        Pylon::IPylonDevice* device = tlFactory.CreateDevice(info);
-        pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(device));
+        // Pylon::CTlFactory& tlFactory = Pylon::CTlFactory::GetInstance(); 
+        // Pylon::CDeviceInfo info; 
+        // info.SetDeviceClass(Pylon::BaslerGigEDeviceClass); 
+        // info.SetIpAddress(BASLER_IP); 
+        // Pylon::IPylonDevice* device = tlFactory.CreateDevice(info);
+        // pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(device));
 
         if (!pBasler)
         {
@@ -93,11 +93,17 @@ bool initCamera(int frame_rate)
         }
         else
         {
-            std::cerr << "[BaslerAdapter::initCamera] Opening camera with IP ("<<BASLER_IP<<")."  << std::endl;
+            std::cerr << "[BaslerAdapter::initCamera] Opening camera with: " << std::endl;
+            std::cout << "\t\t· Model Name " << pBasler->GetDeviceInfo().GetModelName() << std::endl;
+            std::cout << "\t\t· Friendly Name: " << pBasler->GetDeviceInfo().GetFriendlyName() << std::endl;
+            std::cout << "\t\t· Current IP Addr: " << pBasler->GevCurrentIPAddress.ToStringOrDefault("<not readable>") << std::endl;
+            std::cout << "\t\t· Requested IP: " << BASLER_IP << std::endl;
         }
 
         pBasler->Open();
+
         
+        // With autoexposure the camera is not triggering?¿
         // Enable Auto Exposure (set to Continuous mode)
         CHECK_ARW(pBasler->ExposureAuto)
         pBasler->ExposureAuto.SetIntValue(Pylon::BaslerCameraCameraParams_Params::ExposureAuto_Continuous);
@@ -143,6 +149,7 @@ bool endAcquisition()
 bool setAsMaster()
 {
     CHECK_POINTER(pBasler);
+
     try
     {
         // Select Line 2 (output line)
@@ -163,6 +170,12 @@ bool setAsMaster()
         std::cerr << "[BaslerAdapter::setAsMaster] Pylon exception: " << e.GetDescription() << std::endl;
         return false;
     }
+
+    // Setup continuous acquisition as trigger
+    // In theory continuous acquisition is already set by default
+    // pBasler->AcquisitionMode.TrySetValue( Pylon::BaslerCameraCameraParams_Params::AcquisitionMode_Continuous );
+    std::cout << "[BaslerAdapter::setAsMaster] Configured internal trigger and signal output." << std::endl;
+
     return true;   
 }
 

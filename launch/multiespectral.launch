@@ -11,13 +11,13 @@
         <param name="frame_rate" value="$(arg frame_rate)"/>  
     </node>
     
-    <!-- 
+    
     <node pkg="multiespectral_fb" type="basler_master" name="basler_multiespectral" output="screen"
           launch-prefix="bash -c 'sleep 2; rosrun multiespectral_fb basler_master'">
         <param name="dataset_output_path" value="$(arg dataset_output_path)"/>  
         <param name="frame_rate" value="$(arg frame_rate)"/>  
     </node>
-    -->
+    
      
 
 	<!-- <node pkg="multiespectral_fb" type="flir_slave" name="flir_multiespectral" output="screen">

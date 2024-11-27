@@ -23,7 +23,9 @@ class MultiespectralPlugin : public rviz::Panel
 Q_OBJECT
 public:
     MultiespectralPlugin(QWidget* parent = 0);
-
+Q_SIGNALS: 
+    void imageReceived();
+    
 public Q_SLOTS:
     void sendGoal();
     void cancelGoal();
