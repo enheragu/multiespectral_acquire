@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Multiespectral Cámera GUI</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        #images-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+        }
+        .image-box {
+            flex: 1;
+            margin: 10px;
+            max-width: 45%;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Multiespectral Cámera GUI</h1>
+        <form id="control-form">
+            <div class="form-row">
+                <div class="col">
+                    <button id="startBtn" class="btn btn-success btn-block" type="submit">Start Acquisition</button>
+                </div>
+                <div class="col">
+                    <button id="stopBtn" class="btn btn-danger btn-block" type="button">Stop Acquisition</button>
+                </div>
+                <div class="col d-flex align-items-center justify-content-center"> 
+                    <div class="col form-check">
+                        <input type="checkbox" class="form-check-input" id="storeInDriveCheck" name="store_in_drive">
+                        <label class="form-check-label" for="storeInDriveCheck">Store images</label>
+                    </div>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="col">
+                    <label for="frame_rate_lwir">LWIR (Hz):</label>
+                    <input type="text" class="form-control" id="frame_rate_lwir" name="frame_rate_lwir" readonly>
+                </div>
+                <div class="col">
+                    <label for="total_images_received_lwir">Num LWIR img:</label>
+                    <input type="text" class="form-control" id="total_images_received_lwir" name="total_images_received_lwir" readonly>
+                </div>
+                <div class="col">
+                    <label for="lwir_img_storepath">LWIR img path:</label>
+                    <input type="text" class="form-control" id="lwir_img_storepath" name="lwir_img_storepath" readonly>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="col">
+                    <label for="frame_rate_rgb">RGB (Hz):</label>
+                    <input type="text" class="form-control" id="frame_rate_rgb" name="frame_rate_rgb" readonly>
+                </div>
+                <div class="col">
+                    <label for="total_images_received_rgb">Num RGB img:</label>
+                    <input type="text" class="form-control" id="total_images_received_rgb" name="total_images_received_rgb" readonly>
+                </div>
+                <div class="col">
+                    <label for="rgb_img_storepath">RGB img path:</label>
+                    <input type="text" class="form-control" id="rgb_img_storepath" name="rgb_img_storepath" readonly>
+                </div>
+            </div>
+        </form>
+        <div id="images-container">
+            <div class="image-box">
+                <h3>LWIR Img</h3>
+                <img src="" id="lwir_image" class="img-fluid">
+            </div>
+            <div class="image-box">
+                <h3>RGB Img</h3>
+                <img src="" id="rgb_image" class="img-fluid">
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            var socket = io.connect('http://' + document.domain + ':' + location.port);
+
+            $("#control-form").submit(function(event) {
+                event.preventDefault();
+                $.post("/start", $(this).serialize(), function(data) {
+                    $("#status").text(data.status);
+                });
+            });
+
+            $("#stopBtn").click(function() {
+                $.post("/stop", function(data) {
+                    $("#status").text(data.status);
+                });
+            });
+
+            socket.on('update_data', function(data) {
+                $('#frame_rate_lwir').val(data.frame_rate_lwir);
+                $('#total_images_received_lwir').val(data.total_images_received_lwir);
+                $('#lwir_img_path').val(data.lwir_img_path);
+                $('#frame_rate_rgb').val(data.frame_rate_rgb);
+                $('#total_images_received_rgb').val(data.total_images_received_rgb);
+                $('#rgb_img_path').val(data.rgb_img_path);
+                $('#lwir_img_storepath').val(data.lwir_img_storepath);
+                $('#rgb_img_storepath').val(data.rgb_img_storepath);
+                
+                $('#lwir_image').attr('src', 'data:image/jpeg;base64,' + data.lwir_img_path);
+                $('#rgb_image').attr('src', 'data:image/jpeg;base64,' + data.rgb_img_path);
+            });
+        });
+    </script>
+</body>
+</html>
