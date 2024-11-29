@@ -66,6 +66,7 @@ public:
     { 
         // init images acquired counter
         feedback_.images_acquired = 0;
+        feedback_.storage_path = img_path;
 
         // helper variables
         bool result = true;
@@ -75,10 +76,11 @@ public:
         while(ros::ok())
         {
             cv::Mat curr_image;
-            result = this->grabStoreImage(curr_image);
+            result = this->grabStoreImage(curr_image, goal->store);
             if (result) 
             {
                 feedback_.images_acquired = feedback_.images_acquired + 1;
+                
                 if (!curr_image.empty())
                 {
                     // Convert to a sensor_msgs::Image message

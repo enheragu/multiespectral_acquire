@@ -29,7 +29,7 @@ public:
     MultiespectralAcquireT(std::string img_path) : img_path(img_path) {}
     ~MultiespectralAcquireT(void);
     bool init(int frame_rate);
-    bool grabStoreImage(cv::Mat& image);
+    bool grabStoreImage(cv::Mat& image, bool store = true);
 };
 
 #endif //CAMERA_ADAPTER_H
