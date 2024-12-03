@@ -54,12 +54,12 @@ MultiespectralAcquireT::~MultiespectralAcquireT(void)
     ROS_INFO_STREAM_COND(result, "[MultiespectralAcquireT] Correctly finished " << getName() << " camera.");
 }
 
-bool MultiespectralAcquireT::grabStoreImage(cv::Mat& curr_image)
+bool MultiespectralAcquireT::grabStoreImage(cv::Mat& curr_image, bool store)
 {
 
     const std::scoped_lock<std::mutex> lock(camera_mutex);
     bool result =  acquireImage(curr_image);
-    if (result && !curr_image.empty()) 
+    if (result && !curr_image.empty() and store) 
     {
         std::ostringstream filename;
         filename << img_path << "/" << getTimeTag() << ".jpg";
