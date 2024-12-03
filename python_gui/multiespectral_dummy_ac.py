@@ -22,7 +22,7 @@ class DummyMultiespectralAcquire:
         self.socketio = socketio
 
     def sendGoal(self, store):
-        print(f"Send goal with flag as: {store =}")
+        print(f"[MultiespectralAcquireGui] Send goal with flag as: {store =}")
         
         frame_rate_lwir.start()
         frame_rate_rgb.start()
@@ -57,7 +57,7 @@ class DummyMultiespectralAcquire:
         archivos_dir1 = sorted(os.listdir(lwir_path))
         archivos_dir2 = sorted(os.listdir(rgb_path))
         
-        print(f"Start image posting iteration")
+        print(f"[MultiespectralAcquireGui] Start image posting iteration")
         for archivo1, archivo2 in zip(archivos_dir1, archivos_dir2):
             path1 = os.path.join(lwir_path, archivo1)
             path2 = os.path.join(rgb_path, archivo2)
@@ -98,4 +98,4 @@ class DummyMultiespectralAcquire:
 
     def stop(self):
         self.running = False
-        print("Adquisición de imágenes detenida")
+        print("[MultiespectralAcquireGui] Finished image acquisition")

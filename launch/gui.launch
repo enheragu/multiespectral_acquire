@@ -1,0 +1,4 @@
+
+<launch>    
+    <node pkg="multiespectral_fb" type="multiespectral_control.py" name="multiespectral_control" output="screen"/>
+</launch>

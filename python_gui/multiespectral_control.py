@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 import cv2
@@ -7,17 +10,19 @@ import threading
 import signal
 import os
 
-
-
-from multiespectral_dummy_ac import DummyMultiespectralAcquire as MultiespectralAcquire
-# from multiespectral_ros_ac import RosMultiespectralAcquire as MultiespectralAcquire
+try: 
+    import rospy 
+    from multiespectral_ros_ac import RosMultiespectralAcquire as MultiespectralAcquire
+    print(f"[MultiespectralAcquireGui] Using ROS Multiespectral Acquire.")
+except ImportError: 
+    from multiespectral_dummy_ac import DummyMultiespectralAcquire as MultiespectralAcquire
+    print(f"[MultiespectralAcquireGui] No ROS detected. Using Dummy Multiespectral Acquire.")
 
 app = Flask(__name__)
 socketio = SocketIO(app)
 
 store_in_drive = False
 camera_handler = None
-
 
 @app.route('/')
 def home():
@@ -39,7 +44,7 @@ def start_camera():
         camera_handler = MultiespectralAcquire(socketio)
     init_success = camera_handler.sendGoal(store_in_drive)
     if init_success:
-        print(f"Requested goal with {store_in_drive = }")
+        print(f"[MultiespectralAcquireGui] Requested goal with {store_in_drive = }.")
         threading.Thread(target=camera_handler.execute).start()
         return jsonify({"status": "started"})
     else:
@@ -54,7 +59,7 @@ def stop_camera():
     return jsonify({"status": "stopped"})
 
 def sigint_handler(sig, frame):
-    print("SIGINT received, closing application")
+    print("[MultiespectralAcquireGui] SIGINT received, closing application.")
     global camera_handler
     if camera_handler:
         camera_handler.stop()
@@ -62,5 +67,7 @@ def sigint_handler(sig, frame):
 
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, sigint_handler)
+    print("[MultiespectralAcquireGui] Start camera_handler.")
     camera_handler = MultiespectralAcquire(socketio)
+    print("[MultiespectralAcquireGui] Start Flask app.")
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
