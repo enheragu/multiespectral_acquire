@@ -2,22 +2,19 @@
 <launch>
 
     <arg name="dataset_output_path" default="/home/administrator/eeha_images"/>
-    <arg name="frame_rate" default="10"/>
-
+    <arg name="frame_rate" default="2"/>
 
     <!-- IMPORTANT: NEED TO START FLIR FIRST -->
     <node pkg="multiespectral_fb" type="flir_master" name="flir_multiespectral" output="screen">
         <param name="dataset_output_path" value="$(arg dataset_output_path)"/>  
         <param name="frame_rate" value="$(arg frame_rate)"/>  
     </node>
-    
-    
+
     <node pkg="multiespectral_fb" type="basler_master" name="basler_multiespectral" output="screen">
         <param name="dataset_output_path" value="$(arg dataset_output_path)"/>  
         <param name="frame_rate" value="$(arg frame_rate)"/>  
     </node>
 
-    
     <!-- <node pkg="multiespectral_fb" type="multiespectral_control.py" name="multiespectral_control" output="screen"/> -->
     
 

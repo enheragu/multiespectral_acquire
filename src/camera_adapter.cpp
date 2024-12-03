@@ -62,23 +62,25 @@ bool MultiespectralAcquireT::grabStoreImage(cv::Mat& curr_image, bool store)
     if (result && !curr_image.empty() and store) 
     {
         std::ostringstream filename;
-        filename << img_path << "/" << getTimeTag() << ".jpg";
+        filename << img_path << "/" << getTimeTag() << ".png";
         cv::imwrite(filename.str().c_str(), curr_image);
     }
     
     // Convert to a sensor_msgs::Image message detecting encoding
-    std::string encoding;
-    if (curr_image.type() == CV_8UC3) {
-        encoding = sensor_msgs::image_encodings::BGR8;
-    } else if (curr_image.type() == CV_8UC1) {
-        encoding = sensor_msgs::image_encodings::MONO8;
-    } else {
-        std::cerr << "Unsupported image type: " << curr_image.type() << std::endl;
-        return false;
+    if (result)
+    {
+        std::string encoding;
+        if (curr_image.type() == CV_8UC3) {
+            encoding = sensor_msgs::image_encodings::BGR8;
+        } else if (curr_image.type() == CV_8UC1) {
+            encoding = sensor_msgs::image_encodings::MONO8;
+        } else {
+            std::cerr << "Unsupported image type: " << curr_image.type() << std::endl;
+            return false;
+        }
+        sensor_msgs::ImagePtr msg = cv_bridge::CvImage(std_msgs::Header(), encoding, curr_image).toImageMsg();
+        image_pub_.publish(msg);
     }
-    sensor_msgs::ImagePtr msg = cv_bridge::CvImage(std_msgs::Header(), encoding, curr_image).toImageMsg();
-    image_pub_.publish(msg);
-
     ROS_ERROR_STREAM_COND(!result, "[MultiespectralAcquireT::grabStoreImage] Could not acquire image from " << getName() << " camera.");
     return result;
 }

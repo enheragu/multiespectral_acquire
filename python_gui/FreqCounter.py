@@ -31,7 +31,6 @@ class FreqCounter():
 
     def stop(self):
         self.start_time = 0
-        self.items_counter = 0
 
     def __str__(self):
         return f"{self.getFreq():.2f}"

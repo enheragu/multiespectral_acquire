@@ -94,6 +94,16 @@
                 });
             });
 
+            function sendImageSize() {
+                var lwirImageContainer = $('#lwir_image').parent();
+                var rgbImageContainer = $('#rgb_image').parent();
+                var lwirSize = { width: lwirImageContainer.width(), height: lwirImageContainer.height() };
+                var rgbSize = { width: rgbImageContainer.width(), height: rgbImageContainer.height() };
+                socket.emit('image_size', { lwir: lwirSize, rgb: rgbSize });
+            }
+
+            sendImageSize();
+
             socket.on('update_data', function(data) {
                 $('#frame_rate_lwir').val(data.frame_rate_lwir);
                 $('#total_images_received_lwir').val(data.total_images_received_lwir);
@@ -111,3 +121,5 @@
     </script>
 </body>
 </html>
+
+

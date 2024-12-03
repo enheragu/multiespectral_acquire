@@ -128,7 +128,7 @@ bool initCamera(int frame_rate)
 bool beginAcquisition()
 {
     CHECK_POINTER(pBasler);
-    pBasler->StartGrabbing();
+    pBasler->StartGrabbing(Pylon::GrabStrategy_LatestImageOnly);
     return true;
 }
 

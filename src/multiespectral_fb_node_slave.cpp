@@ -14,13 +14,14 @@ std::string IMAGE_PATH;
 
 class MultiespectralAcquire : public MultiespectralAcquireT
 {
-private:
-
+protected:
+    int current_frame_rate = 0;
 public:
     MultiespectralAcquire(std::string name, std::string img_path): MultiespectralAcquireT(img_path) {    }
 
     bool init(int frame_rate)
     {
+        current_frame_rate = frame_rate;
         bool result = MultiespectralAcquireT::init(frame_rate);
         result = result && setAsSlave();
 
@@ -36,11 +37,14 @@ public:
     {
         bool result = false;
         ROS_INFO_STREAM("[MultiespectralAcquire::execute] Start image acquisition loop.");
+
+        ros::Rate loop_rate(current_frame_rate);
         while (ros::ok())
         {
             cv::Mat curr_image;
             result = this->grabStoreImage(curr_image);
             ros::spinOnce();
+            loop_rate.sleep();
         }
         return result;
     }

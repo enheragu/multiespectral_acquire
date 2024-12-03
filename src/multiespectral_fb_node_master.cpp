@@ -30,7 +30,7 @@ protected:
     actionlib::SimpleActionServer<multiespectral_fb::MultiespectralAcquisitionAction> as_;
     std::string action_name_;
     multiespectral_fb::MultiespectralAcquisitionFeedback feedback_;
-
+    int current_frame_rate = 0;
 public:
 
     MultiespectralAcquire(std::string name, std::string img_path) :
@@ -45,6 +45,7 @@ public:
 
     bool init(int frame_rate)
     {
+        current_frame_rate = frame_rate;
         bool result = MultiespectralAcquireT::init(frame_rate);
         result = result && setAsMaster();
 
@@ -58,19 +59,19 @@ public:
 
     void executeCB(const multiespectral_fb::MultiespectralAcquisitionGoalConstPtr &goal)
     { 
-        // init images acquired counter
         feedback_.images_acquired = 0;
         feedback_.storage_path = "";
+        ROS_INFO_STREAM("[MultiespectralAcquire::executeCB] Start image acquisition loop. " << std::string(goal->store?"S":"Not s") << "toring images. Frame rate is "<<std::to_string(current_frame_rate));
+
         if (goal->store)
         {
             feedback_.storage_path = img_path;
+            ROS_INFO_STREAM("[MultiespectralAcquire::executeCB] Storing images to " << img_path);
         }
 
-        // helper variables
         bool result = true;
-
-        // start image acquisition
-        ROS_INFO_STREAM("[MultiespectralAcquire::executeCB] Start image acquisition loop.");
+        
+        ros::Rate loop_rate(current_frame_rate);
         while(ros::ok())
         {
             cv::Mat curr_image;
@@ -83,18 +84,16 @@ public:
                 {
                     feedback_.images_acquired = feedback_.images_acquired + 1;
                 }
+                as_.publishFeedback(feedback_);
             }
             
-            // check that preempt has not been requested by the client
             if (as_.isPreemptRequested() || !ros::ok())
             {
                 ROS_INFO("%s: Preempted", action_name_.c_str());
-                as_.setPreempted(); // set the action state to preempted
+                as_.setPreempted();
                 break;
             }
-
-            // publish the feedback
-            as_.publishFeedback(feedback_);
+            loop_rate.sleep();
         }
     }
 }; // End class MultiespectralAcquire
@@ -119,7 +118,7 @@ int main(int argc, char** argv)
     std::string path = IMAGE_PATH+std::string("/")+getType()+std::string("/");
     std::filesystem::create_directories(IMAGE_PATH+std::string("/")+getType());
 
-    ROS_INFO_STREAM("[MultiespectralAcquire::main] Images will be stored in path: " << path);
+    ROS_INFO_STREAM("[MultiespectralAcquire::"<<getType()<<"::main] Images will be stored in path: " << path);
     std::shared_ptr<MultiespectralAcquire> camera_handler_ptr;
     camera_handler_ptr = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire_" + getType(), path);
     bool result = camera_handler_ptr->init(frame_rate);

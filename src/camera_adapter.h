@@ -29,7 +29,7 @@ class MultiespectralAcquireT
 protected:
     std::string img_path = "";
     std::mutex camera_mutex; // Avoid deinitialization while grabbing image
-
+    
     ros::NodeHandle nh_;
     image_transport::Publisher image_pub_;
 public:
@@ -38,6 +38,9 @@ public:
     bool init(int frame_rate);
     bool grabStoreImage(cv::Mat& image, bool store = true);
     bool changeFrameRate(int frame_rate);
+    
+    // see function definition
+    void dummyCallback(const sensor_msgs::ImageConstPtr& msg);
 };
 
 #endif //CAMERA_ADAPTER_H
