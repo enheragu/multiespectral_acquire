@@ -5,11 +5,12 @@ import time
 import cv2
 import base64
 import threading
+import numpy as np
 from cv_bridge import CvBridge, CvBridgeError
 
 import rospy
 import actionlib
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage
 
 import multiespectral_fb.msg   
 from FreqCounter import FreqCounter
@@ -25,9 +26,9 @@ camera_handler = None
 
 flir_ac_name = "MultiespectralAcquire_lwir"
 basler_ac_name = "MultiespectralAcquire_visible"
-flir_topic_name = "/lwir_image"
-basler_topic_name = "/visible_image"
-image_size = {'lwir': (320, 240), 'rgb': (320, 240)}
+flir_topic_name = "/lwir_image/compressed"
+basler_topic_name = "/visible_image/compressed"
+image_size = {'lwir': (640, 480), 'rgb': (640, 480)}
 
 bridge = CvBridge()
 
@@ -48,8 +49,8 @@ class RosMultiespectralAcquire:
             self.client[-1].wait_for_server()
 
         # Suscribirse a los topics de imagen
-        self.image_sub1 = rospy.Subscriber(flir_topic_name, Image, self.lwir_image_cb)
-        self.image_sub2 = rospy.Subscriber(basler_topic_name, Image, self.rgb_image_cb)
+        self.image_sub1 = rospy.Subscriber(flir_topic_name, CompressedImage, self.lwir_image_cb)
+        self.image_sub2 = rospy.Subscriber(basler_topic_name, CompressedImage, self.rgb_image_cb)
 
         self.ros_thread = threading.Thread(target=ros_spin_thread) 
         self.ros_thread.start()
@@ -142,7 +143,7 @@ class RosMultiespectralAcquire:
         
     def convert_image(self, ros_image):
         try:
-            if ros_image.data:
+            if ros_image.data and isinstance(ros_image, Image):
                 if ros_image.encoding == "mono8":
                     cv_image = bridge.imgmsg_to_cv2(ros_image, "mono8")
                 elif ros_image.encoding == "bgr8":
@@ -150,6 +151,10 @@ class RosMultiespectralAcquire:
                 else:
                     rospy.logwarn(f"Unexpected image encoding: {ros_image.encoding}. Defaulting to 'bgr8'.")
                     cv_image = bridge.imgmsg_to_cv2(ros_image, "bgr8")
+                return cv_image
+            elif isinstance(ros_image, CompressedImage):
+                np_arr = np.frombuffer(ros_image.data, np.uint8)
+                cv_image = cv2.imdecode(np_arr, cv2.IMREAD_GRAYSCALE if "mono8" in ros_image.format else cv2.IMREAD_COLOR)
                 return cv_image
             else:
                 rospy.logwarn("Received empty image message.")

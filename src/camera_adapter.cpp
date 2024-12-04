@@ -59,29 +59,33 @@ bool MultiespectralAcquireT::grabStoreImage(cv::Mat& curr_image, bool store)
 
     const std::scoped_lock<std::mutex> lock(camera_mutex);
     bool result =  acquireImage(curr_image);
-    if (result && !curr_image.empty() and store) 
+    if (result && !curr_image.empty() && store) 
     {
         std::ostringstream filename;
         filename << img_path << "/" << getTimeTag() << ".png";
         cv::imwrite(filename.str().c_str(), curr_image);
-    }
+    } 
     
     // Convert to a sensor_msgs::Image message detecting encoding
-    if (result)
+    if (result && !curr_image.empty())
     {
         std::string encoding;
         if (curr_image.type() == CV_8UC3) {
-            encoding = sensor_msgs::image_encodings::BGR8;
+            encoding = "bgr8";
         } else if (curr_image.type() == CV_8UC1) {
-            encoding = sensor_msgs::image_encodings::MONO8;
+            encoding = "mono8";
         } else {
             std::cerr << "Unsupported image type: " << curr_image.type() << std::endl;
             return false;
         }
         sensor_msgs::ImagePtr msg = cv_bridge::CvImage(std_msgs::Header(), encoding, curr_image).toImageMsg();
         image_pub_.publish(msg);
+        ros::spinOnce(); // without explicit spinOnce, the LWIR image is as black (rgb is ok...). The info stream also works?¿
+        //ROS_INFO_STREAM("Published image with encoding: " << encoding);
     }
+
     ROS_ERROR_STREAM_COND(!result, "[MultiespectralAcquireT::grabStoreImage] Could not acquire image from " << getName() << " camera.");
+    ROS_ERROR_STREAM_COND(curr_image.empty(), "[MultiespectralAcquireT::grabStoreImage] Image is empty for " << getName() << " camera.");
     return result;
 }
 
