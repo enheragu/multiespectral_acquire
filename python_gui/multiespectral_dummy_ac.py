@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# encoding: utf-8
+
 from flask_socketio import SocketIO, emit
 import cv2
 import base64
@@ -94,7 +97,7 @@ class DummyMultiespectralAcquire:
 
             if not self.running:
                 break
-            time.sleep(0.5)
+            time.sleep(0.15)
 
     def stop(self):
         self.running = False

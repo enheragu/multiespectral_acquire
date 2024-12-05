@@ -14,6 +14,30 @@
             margin: 10px;
             max-width: 45%;
         }
+        .orientation-layout {
+            display: none; /* Oculta por defecto */
+        }
+        @media (orientation: landscape) {
+            #layout-landscape {
+                display: block; /* Muestra el diseño para landscape */
+            }
+        }
+        @media (orientation: portrait) {
+            #layout-portrait {
+                display: block; /* Muestra el diseño para portrait */
+            }
+            #images-container {
+                display: flex;
+                flex-direction: column; /* Imágenes en una columna */
+            }
+            .image-box {
+                max-width: 90%; /* Imágenes ocupan todo el ancho */
+            }
+            .btn {
+                min-height: 100px;
+                align-items: center;
+            }
+        }
     </style>
 </head>
 <body>
@@ -34,32 +58,69 @@
                     </div>
                 </div>
             </div>
-            <div class="form-row">
-                <div class="col">
-                    <label for="frame_rate_lwir">LWIR (Hz):</label>
-                    <input type="text" class="form-control" id="frame_rate_lwir" name="frame_rate_lwir" readonly>
+            <!-- Layout para landscape -->
+            <div id="layout-landscape" class="orientation-layout">
+                <div class="form-row">
+                    <div class="col">
+                        <label for="frame_rate_lwir_landscape">LWIR (Hz):</label>
+                        <input type="text" class="form-control" id="frame_rate_lwir_landscape" name="frame_rate_lwir" readonly>
+                    </div>
+                    <div class="col">
+                        <label for="total_images_received_lwir_landscape">Num LWIR img:</label>
+                        <input type="text" class="form-control" id="total_images_received_lwir_landscape" name="total_images_received_lwir" readonly>
+                    </div>
+                    <div class="col">
+                        <label for="lwir_img_storepath_landscape">LWIR img path:</label>
+                        <input type="text" class="form-control" id="lwir_img_storepath_landscape" name="lwir_img_storepath" readonly>
+                    </div>
                 </div>
-                <div class="col">
-                    <label for="total_images_received_lwir">Num LWIR img:</label>
-                    <input type="text" class="form-control" id="total_images_received_lwir" name="total_images_received_lwir" readonly>
-                </div>
-                <div class="col">
-                    <label for="lwir_img_storepath">LWIR img path:</label>
-                    <input type="text" class="form-control" id="lwir_img_storepath" name="lwir_img_storepath" readonly>
+                <div class="form-row">
+                    <div class="col">
+                        <label for="frame_rate_rgb_landscape">RGB (Hz):</label>
+                        <input type="text" class="form-control" id="frame_rate_rgb_landscape" name="frame_rate_rgb" readonly>
+                    </div>
+                    <div class="col">
+                        <label for="total_images_received_rgb_landscape">Num RGB img:</label>
+                        <input type="text" class="form-control" id="total_images_received_rgb_landscape" name="total_images_received_rgb" readonly>
+                    </div>
+                    <div class="col">
+                        <label for="rgb_img_storepath_landscape">RGB img path:</label>
+                        <input type="text" class="form-control" id="rgb_img_storepath_landscape" name="rgb_img_storepath" readonly>
+                    </div>
                 </div>
             </div>
-            <div class="form-row">
-                <div class="col">
-                    <label for="frame_rate_rgb">RGB (Hz):</label>
-                    <input type="text" class="form-control" id="frame_rate_rgb" name="frame_rate_rgb" readonly>
+
+            <!-- Layout para portrait -->
+            <div id="layout-portrait" class="orientation-layout">
+                <div class="form-row">
+                    <div class="col">
+                        <label for="frame_rate_lwir_portrait">LWIR (Hz):</label>
+                        <input type="text" class="form-control" id="frame_rate_lwir_portrait" name="frame_rate_lwir" readonly>
+                    </div>
+                    <div class="col">
+                        <label for="frame_rate_rgb_portrait">RGB (Hz):</label>
+                        <input type="text" class="form-control" id="frame_rate_rgb_portrait" name="frame_rate_rgb" readonly>
+                    </div>
                 </div>
-                <div class="col">
-                    <label for="total_images_received_rgb">Num RGB img:</label>
-                    <input type="text" class="form-control" id="total_images_received_rgb" name="total_images_received_rgb" readonly>
+                <div class="form-row">
+                    <div class="col">
+                        <label for="total_images_received_lwir_portrait">Num LWIR img:</label>
+                        <input type="text" class="form-control" id="total_images_received_lwir_portrait" name="total_images_received_lwir" readonly>
+                    </div>
+                    <div class="col">
+                        <label for="total_images_received_rgb_portrait">Num RGB img:</label>
+                        <input type="text" class="form-control" id="total_images_received_rgb_portrait" name="total_images_received_rgb" readonly>
+                    </div>
                 </div>
-                <div class="col">
-                    <label for="rgb_img_storepath">RGB img path:</label>
-                    <input type="text" class="form-control" id="rgb_img_storepath" name="rgb_img_storepath" readonly>
+                <div class="form-row">
+                    <div class="col">
+                        <label for="lwir_img_storepath_portrait">LWIR img path:</label>
+                        <input type="text" class="form-control" id="lwir_img_storepath_portrait" name="lwir_img_storepath" readonly>
+                    </div>
+                    <div class="col">
+                        <label for="rgb_img_storepath_portrait">RGB img path:</label>
+                        <input type="text" class="form-control" id="rgb_img_storepath_portrait" name="rgb_img_storepath" readonly>
+                    </div>
                 </div>
             </div>
         </form>
@@ -105,21 +166,45 @@
             sendImageSize();
 
             socket.on('update_data', function(data) {
-                $('#frame_rate_lwir').val(data.frame_rate_lwir);
-                $('#total_images_received_lwir').val(data.total_images_received_lwir);
-                $('#lwir_img_path').val(data.lwir_img_path);
-                $('#frame_rate_rgb').val(data.frame_rate_rgb);
-                $('#total_images_received_rgb').val(data.total_images_received_rgb);
-                $('#rgb_img_path').val(data.rgb_img_path);
-                $('#lwir_img_storepath').val(data.lwir_img_storepath);
-                $('#rgb_img_storepath').val(data.rgb_img_storepath);
+                // Actualizar datos de layout-landscape
+                $('#frame_rate_lwir_landscape').val(data.frame_rate_lwir);
+                $('#total_images_received_lwir_landscape').val(data.total_images_received_lwir);
+                $('#lwir_img_storepath_landscape').val(data.lwir_img_storepath);
+                
+                $('#frame_rate_rgb_landscape').val(data.frame_rate_rgb);
+                $('#total_images_received_rgb_landscape').val(data.total_images_received_rgb);
+                $('#rgb_img_storepath_landscape').val(data.rgb_img_storepath);
+
+                // Actualizar datos de layout-portrait
+                $('#frame_rate_lwir_portrait').val(data.frame_rate_lwir);
+                $('#frame_rate_rgb_portrait').val(data.frame_rate_rgb);
+                $('#total_images_received_lwir_portrait').val(data.total_images_received_lwir);
+                $('#total_images_received_rgb_portrait').val(data.total_images_received_rgb);
+                $('#lwir_img_storepath_portrait').val(data.lwir_img_storepath);
+                $('#rgb_img_storepath_portrait').val(data.rgb_img_storepath);
                 
                 $('#lwir_image').attr('src', 'data:image/jpeg;base64,' + data.lwir_img_path);
                 $('#rgb_image').attr('src', 'data:image/jpeg;base64,' + data.rgb_img_path);
             });
+
+            window.addEventListener("orientationchange", function() {
+                const landscapeLayout = document.getElementById('layout-landscape');
+                const portraitLayout = document.getElementById('layout-portrait');
+                if (window.innerHeight > window.innerWidth) {
+                    // Portrait
+                    landscapeLayout.style.display = 'none';
+                    portraitLayout.style.display = 'block';
+                } else {
+                    // Landscape
+                    landscapeLayout.style.display = 'block';
+                    portraitLayout.style.display = 'none';
+                }
+            });
+
+            // Ejecutar una vez al cargar la página
+            window.dispatchEvent(new Event('orientationchange'));
+
         });
     </script>
 </body>
 </html>
-
-
