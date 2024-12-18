@@ -19,6 +19,7 @@ except ImportError:
     print(f"[MultiespectralAcquireGui] No ROS detected. Using Dummy Multiespectral Acquire.")
 
 app = Flask(__name__)
+# socketio = SocketIO(app, cors_allowed_origins="*") # Allow multiple connections from different origins
 socketio = SocketIO(app)
 
 store_in_drive = False

@@ -71,6 +71,7 @@ class RosMultiespectralAcquire:
             client.cancel_goal()
 
     def stop(self):
+        rospy.loginfo("Stopping image acquisition")
         self.cancelGoal()
         frame_rate_lwir.stop()
         frame_rate_rgb.stop()
@@ -83,6 +84,7 @@ class RosMultiespectralAcquire:
         goal = multiespectral_fb.msg.MultiespectralAcquisitionGoal()
         goal.store = store
 
+        rospy.loginfo(f'Send goal with store flag as {store}.')
         for client in self.client:
             client.send_goal(goal, feedback_cb=self.feedback_cb)
 
