@@ -112,6 +112,9 @@ bool initCamera(int frame_rate)
         pBasler->AcquisitionFrameRateEnable.SetValue(true);
         pBasler->AcquisitionFrameRateAbs.SetValue(frame_rate);
 
+        // Enable PTP and set camera as slave
+        // pBasler->GevIEEE1588.SetValue(true);
+
         return true;
     }
     catch (const Pylon::GenericException &e)
@@ -199,7 +202,7 @@ bool setAsSlave()
  * @param image CV mat reference to be filled with image
  * @return true or false depending on image acquisition
  */
-bool acquireImage(cv::Mat& image)
+bool acquireImage(cv::Mat& image, uint64_t& timestamp)
 {
     
     CHECK_POINTER(pBasler);
@@ -230,6 +233,7 @@ bool acquireImage(cv::Mat& image)
             formatConverter.Convert(pylonImage, ptrGrabResult);
             // needs to be cloned so to not keep pointing to local raw data that will be destroyed after function finishes
             image = cv::Mat(ptrGrabResult->GetHeight(), ptrGrabResult->GetWidth(), CV_8UC3, (uint8_t *)pylonImage.GetBuffer()).clone();
+            timestamp = ptrGrabResult->GetTimeStamp();
         }
         else
         {

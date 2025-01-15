@@ -37,6 +37,10 @@ bridge = CvBridge()
 def ros_spin_thread(): 
     rospy.spin()
 
+
+# Which actions will be used
+ac_subs_list = [basler_ac_name]  # flir_ac_name,  # FLIR working as slave already :)
+
 class RosMultiespectralAcquire:
     def __init__(self, socketio):
         rospy.init_node('multiespectral_flask_gui') 
@@ -45,7 +49,7 @@ class RosMultiespectralAcquire:
         self.socketio = socketio
         
         self.client = []
-        for ac_name in [flir_ac_name, basler_ac_name]:
+        for ac_name in ac_subs_list:
             self.client.append(actionlib.SimpleActionClient(ac_name, multiespectral_fb.msg.MultiespectralAcquisitionAction))
             rospy.loginfo(f'Result: Wait for {ac_name} server')
             self.client[-1].wait_for_server()

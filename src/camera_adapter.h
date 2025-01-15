@@ -20,7 +20,7 @@ bool beginAcquisition();
 bool endAcquisition();
 bool setAsMaster();
 bool setAsSlave();
-bool acquireImage(cv::Mat& image);
+bool acquireImage(cv::Mat& image, uint64_t& timestamp);
 bool closeCamera();
 
 
@@ -36,7 +36,9 @@ public:
     MultiespectralAcquireT(std::string img_path);
     ~MultiespectralAcquireT(void);
     bool init(int frame_rate);
-    bool grabStoreImage(cv::Mat& image, bool store = true);
+    bool grabImage(cv::Mat& curr_image, uint64_t& timestamp);
+    bool StoreImage(cv::Mat& curr_image, uint64_t& timestamp, bool store = true);
+    bool grabStoreImage(cv::Mat& image, uint64_t& timestamp, bool store = true);
     bool changeFrameRate(int frame_rate);
     
     // see function definition

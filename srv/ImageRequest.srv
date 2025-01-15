@@ -1,0 +1,6 @@
+# Solicitud
+uint64 timestamp
+bool store
+---
+# Respuesta
+bool success

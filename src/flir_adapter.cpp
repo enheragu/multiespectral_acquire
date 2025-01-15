@@ -208,6 +208,21 @@ bool initCamera(int frame_rate)
         Spinnaker::GenApi::CEnumEntryPtr ptrHandlingModeEntry = ptrHandlingMode->GetEntryByName("NewestOnly");
         ptrHandlingMode->SetIntValue(ptrHandlingModeEntry->GetValue());
 
+        // Enable PTP
+        // Spinnaker::GenApi::CBooleanPtr ptrPtpEnable = nodeMap.GetNode("PtpEnable");
+        // CHECK_ARW(ptrPtpEnable);
+        // ptrPtpEnable->SetValue(true);
+        // std::cout << "PTP habilitado en la cámara." << std::endl;
+
+        // Setup camera as slave in PTP
+        // Spinnaker::GenApi::CEnumerationPtr ptrPtpRole = nodeMap.GetNode("PtpRole");
+        // CHECK_ARW(ptrPtpRole);
+        // Spinnaker::GenApi::CEnumEntryPtr ptrPtpRoleSlave = ptrPtpRole->GetEntryByName("Slave");
+        // CHECK_AR(ptrPtpRoleSlave);
+        // const int64_t ptpRoleSlave = ptrPtpRoleSlave->GetValue();
+        // ptrPtpRole->SetIntValue(ptpRoleSlave);
+
+
         result = true;
 
     }
@@ -341,7 +356,7 @@ bool setAsSlave()
  * @param image CV mat reference to be filled with image
  * @return true or false depending on image acquisition
  */
-bool acquireImage(cv::Mat& image)
+bool acquireImage(cv::Mat& image, uint64_t& timestamp)
 {
     CHECK_POINTER(pFlir);
     bool result = true;
@@ -372,6 +387,7 @@ bool acquireImage(cv::Mat& image)
             void *image_data = convertedImage->GetData();
             unsigned int stride = convertedImage->GetStride();
             image = cv::Mat(rows, cols, (num_channels == 3) ? CV_8UC3 : CV_8UC1, image_data, stride);
+            timestamp = convertedImage->GetTimeStamp();
         }      
         pResultImage->Release();  
     }

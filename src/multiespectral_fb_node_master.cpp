@@ -15,6 +15,7 @@
 #include <ros/ros.h>
 #include <actionlib/server/simple_action_server.h>
 #include <multiespectral_fb/MultiespectralAcquisitionAction.h>
+#include <multiespectral_fb/ImageRequest.h>
 
 #include "camera_adapter.h"
 
@@ -31,6 +32,8 @@ protected:
     std::string action_name_;
     multiespectral_fb::MultiespectralAcquisitionFeedback feedback_;
     int current_frame_rate = 0;
+
+    ros::ServiceClient slave_camera_client_;
 public:
 
     MultiespectralAcquire(std::string name, std::string img_path) :
@@ -41,16 +44,18 @@ public:
         as_.start();
 
         image_transport::ImageTransport it(nh_);
+
+        slave_camera_client_ = nh_.serviceClient<multiespectral_fb::ImageRequest>("multiespectral_slave_service");
     }
 
     bool init(int frame_rate)
     {
         current_frame_rate = frame_rate;
         bool result = MultiespectralAcquireT::init(frame_rate);
-        result = result && setAsMaster();
+        // result = result && setAsMaster();
 
-        ROS_FATAL_STREAM_COND(!result, "[MultiespectralAcquire::init] Could not configure " << getName() << " camera as master.");
-        ROS_INFO_STREAM_COND(result, "[MultiespectralAcquire::init] Initialized " << getName() << " camera as master.");
+        ROS_FATAL_STREAM_COND(!result, "[MAMaster::init] Could not configure " << getName() << " camera as master.");
+        ROS_INFO_STREAM_COND(result, "[MAMaster::init] Initialized " << getName() << " camera as master with "<<current_frame_rate<<"Hz frame rate.");
         
         result = result && beginAcquisition();
 
@@ -61,12 +66,12 @@ public:
     { 
         feedback_.images_acquired = 0;
         feedback_.storage_path = "";
-        ROS_INFO_STREAM("[MultiespectralAcquire::executeCB] Start image acquisition loop. " << std::string(goal->store?"S":"Not s") << "toring images. Frame rate is "<<std::to_string(current_frame_rate));
+        ROS_INFO_STREAM("[MAMaster::executeCB] Start image acquisition loop. " << std::string(goal->store?"S":"Not s") << "toring images. Frame rate is "<<std::to_string(current_frame_rate) << "Hz for camera " << getName() << ".");
 
         if (goal->store)
         {
             feedback_.storage_path = img_path;
-            ROS_INFO_STREAM("[MultiespectralAcquire::executeCB] Storing images to " << img_path);
+            ROS_INFO_STREAM("[MAMaster::executeCB] Storing images to " << img_path);
         }
 
         bool result = true;
@@ -75,7 +80,9 @@ public:
         while(ros::ok())
         {
             cv::Mat curr_image;
-            result = this->grabStoreImage(curr_image, goal->store);
+            uint64_t timestamp;
+            // ROS_INFO("[MAMaster::executeCB] Grabbing image.");
+            result = this->grabStoreImage(curr_image, timestamp, goal->store);
             if (result) 
             {
                 feedback_.images_acquired = feedback_.images_acquired + 1;
@@ -86,6 +93,16 @@ public:
                 }
                 as_.publishFeedback(feedback_);
             }
+
+            // ROS_INFO("[MAMaster::executeCB] Prepare request for image with timestamp: %lu", timestamp);
+            multiespectral_fb::ImageRequest srv;
+            srv.request.timestamp = timestamp;
+            srv.request.store = goal->store;
+            if (!slave_camera_client_.call(srv))
+            {
+                ROS_ERROR_STREAM("Could not contact with slave service to request image with current timestamp: " << timestamp);
+            }
+            // ROS_INFO("[MAMaster::executeCB] Requested image with timestamp: %lu", timestamp);
             
             if (as_.isPreemptRequested() || !ros::ok())
             {
@@ -118,7 +135,7 @@ int main(int argc, char** argv)
     std::string path = IMAGE_PATH+std::string("/")+getType()+std::string("/");
     std::filesystem::create_directories(IMAGE_PATH+std::string("/")+getType());
 
-    ROS_INFO_STREAM("[MultiespectralAcquire::"<<getType()<<"::main] Images will be stored in path: " << path);
+    ROS_INFO_STREAM("[MAMaster::"<<getType()<<"::main] Images will be stored in path: " << path);
     std::shared_ptr<MultiespectralAcquire> camera_handler_ptr;
     camera_handler_ptr = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire_" + getType(), path);
     bool result = camera_handler_ptr->init(frame_rate);

@@ -39,6 +39,11 @@ add_action_files(
   FILES MultiespectralAcquisition.action
 )
 
+add_service_files(
+  DIRECTORY srv
+  FILES ImageRequest.srv
+)
+
 generate_messages(
   DEPENDENCIES actionlib_msgs std_msgs  # Or other packages containing msgs
 )
