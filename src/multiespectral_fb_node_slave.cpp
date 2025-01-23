@@ -1,5 +1,5 @@
 
-
+#include <thread>
 #include <signal.h>
 #include <memory>
 #include <filesystem>
@@ -61,8 +61,8 @@ public:
             result = this->grabImage(curr_image, timestamp);
             if (result && !curr_image.empty()) 
             {
-                cv::imshow("Imagen", closest_image);
-                cv::waitKey(0); // Esperar a que se presione una tecla para cerrar la ventana
+                // cv::imshow("Imagen", curr_image);
+                // cv::waitKey(0); // Esperar a que se presione una tecla para cerrar la ventana
 
                 addImageToBuffer(curr_image, timestamp);
             }
@@ -105,7 +105,7 @@ public:
                 return true;
             }
         }
-        
+        ros::spinOnce();
         res.success = ret;
         return ret;
     }
@@ -129,6 +129,13 @@ void sigintHandler(int dummy)
     // camera_handler_ptr.reset();
 }
 
+void executeInThread(std::shared_ptr<MultiespectralAcquire> camera_handler_ptr)
+{
+    if (camera_handler_ptr) {
+        camera_handler_ptr->execute();
+    }
+}
+
 int main(int argc, char **argv)
 {
     signal(SIGINT, sigintHandler);
@@ -146,7 +153,16 @@ int main(int argc, char **argv)
     camera_handler_ptr = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire", path);
     bool result = camera_handler_ptr->init(frame_rate);
    
-    if (result) camera_handler_ptr->execute();
+    // if (result) camera_handler_ptr->execute();
+    std::thread camera_thread(executeInThread, camera_handler_ptr);
+    ros::AsyncSpinner spinner(2); // 2 hilos para manejar callbacks
+    spinner.start();
+
+    ros::waitForShutdown();
+    if (camera_thread.joinable()) {
+        camera_thread.join();
+    }
+
 
     return 0;
 }

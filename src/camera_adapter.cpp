@@ -98,8 +98,8 @@ bool MultiespectralAcquireT::StoreImage(cv::Mat& curr_image, uint64_t& timestamp
 
         sensor_msgs::ImagePtr msg = cv_bridge::CvImage(header, encoding, curr_image).toImageMsg();
         image_pub_.publish(msg);
-        ros::spinOnce(); // without explicit spinOnce, the LWIR image is as black (rgb is ok...). The info stream also works?¿
-        ROS_INFO_STREAM("[MAT::StoreImage] Published image from "<<getName()<<" with encoding: " << encoding);
+        // ros::spinOnce(); // without explicit spinOnce, the LWIR image is as black (rgb is ok...). The info stream also works?¿
+        // ROS_INFO_STREAM("[MAT::StoreImage] Published image from "<<getName()<<" with encoding: " << encoding);
     }
 
     ROS_ERROR_STREAM_COND(curr_image.empty(), "[MAT::StoreImage] Image is empty for " << getName() << " camera.");

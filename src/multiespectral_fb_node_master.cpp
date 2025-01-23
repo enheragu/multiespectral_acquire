@@ -140,7 +140,12 @@ int main(int argc, char** argv)
     camera_handler_ptr = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire_" + getType(), path);
     bool result = camera_handler_ptr->init(frame_rate);
     
-    if (result) ros::spin();
+    if (result) 
+    {
+        ros::spin();
+        // ros::AsyncSpinner spinner(2); // 2 hilos para manejar callbacks
+        // spinner.start();
+    }
 
     return 0;
 }
