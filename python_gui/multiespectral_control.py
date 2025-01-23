@@ -2,6 +2,7 @@
 # encoding: utf-8
 
 from flask import Flask, render_template, request, jsonify
+from flask import make_response
 from flask_socketio import SocketIO, emit
 import cv2
 import base64
@@ -58,6 +59,12 @@ def stop_camera():
         camera_handler.stop()
         camera_handler = None
     return jsonify({"status": "stopped"})
+
+@app.route('/manifest')
+def manifest():
+    res = make_response(render_template('manifest.appcache'), 200)
+    res.headers["Content-Type"] = "text/cache-manifest"
+    return res
 
 def sigint_handler(sig, frame):
     print("[MultiespectralAcquireGui] SIGINT received, closing application.")
