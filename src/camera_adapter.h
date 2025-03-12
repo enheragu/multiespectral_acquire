@@ -15,7 +15,7 @@
 
 std::string getName();
 std::string getType();
-bool initCamera(int frame_rate);
+bool initCamera(int frame_rate, std::string camera_ip);
 bool beginAcquisition();
 bool endAcquisition();
 bool setAsMaster();
@@ -29,13 +29,16 @@ class MultiespectralAcquireT
 protected:
     std::string img_path = "";
     std::mutex camera_mutex; // Avoid deinitialization while grabbing image
+
+    std::string camera_ip;
+    std::string topic_name;
     
     ros::NodeHandle nh_;
     image_transport::Publisher image_pub_;
 public:
-    MultiespectralAcquireT(std::string img_path);
+    MultiespectralAcquireT(std::string img_path, std::string topic_name);
     ~MultiespectralAcquireT(void);
-    bool init(int frame_rate);
+    bool init(int frame_rate, std::string camera_ip);
     bool grabImage(cv::Mat& curr_image, uint64_t& timestamp);
     bool StoreImage(cv::Mat& curr_image, uint64_t& timestamp, bool store = true);
     bool grabStoreImage(cv::Mat& image, uint64_t& timestamp, bool store = true);

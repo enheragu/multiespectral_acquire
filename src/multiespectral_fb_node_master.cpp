@@ -20,6 +20,8 @@
 #include "camera_adapter.h"
 
 std::string IMAGE_PATH; 
+std::string IMAGE_TOPIC;
+std::string CAMERA_IP;
 
 // class MultiespectralAcquire;
 // std::shared_ptr<MultiespectralAcquire> camera_handler_ptr;
@@ -36,10 +38,10 @@ protected:
     ros::ServiceClient slave_camera_client_;
 public:
 
-    MultiespectralAcquire(std::string name, std::string img_path) :
+    MultiespectralAcquire(std::string name, std::string img_path, std::string topic_name) :
         as_(nh_, name, boost::bind(&MultiespectralAcquire::executeCB, this, _1), false),
         action_name_(name),
-        MultiespectralAcquireT(img_path)
+        MultiespectralAcquireT(img_path, topic_name)
     {
         as_.start();
 
@@ -48,10 +50,10 @@ public:
         slave_camera_client_ = nh_.serviceClient<multiespectral_fb::ImageRequest>("multiespectral_slave_service");
     }
 
-    bool init(int frame_rate)
+    bool init(int frame_rate, std::string camera_ip)
     {
         current_frame_rate = frame_rate;
-        bool result = MultiespectralAcquireT::init(frame_rate);
+        bool result = MultiespectralAcquireT::init(frame_rate, camera_ip);
         // result = result && setAsMaster();
 
         ROS_FATAL_STREAM_COND(!result, "[MAMaster::init] Could not configure " << getName() << " camera as master.");
@@ -127,18 +129,21 @@ int main(int argc, char** argv)
 {
     signal(SIGINT, sigintHandler);
     ros::init(argc, argv, "MultiespectralMasterAcquire_" + getType());
+    std::string node_name = ros::this_node::getName();
 
     int frame_rate;
     ros::param::param<std::string>("~dataset_output_path", IMAGE_PATH, "./");
     ros::param::param<int>("~frame_rate", frame_rate, 10);
+    ros::param::param<std::string>("~image_topic", IMAGE_TOPIC, getType()+"_image");
+    ros::param::param<std::string>("~camera_ip", CAMERA_IP, "");
 
     std::string path = IMAGE_PATH+std::string("/")+getType()+std::string("/");
     std::filesystem::create_directories(IMAGE_PATH+std::string("/")+getType());
 
     ROS_INFO_STREAM("[MAMaster::"<<getType()<<"::main] Images will be stored in path: " << path);
     std::shared_ptr<MultiespectralAcquire> camera_handler_ptr;
-    camera_handler_ptr = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire_" + getType(), path);
-    bool result = camera_handler_ptr->init(frame_rate);
+    camera_handler_ptr = std::make_shared<MultiespectralAcquire>("MultiespectralA" + node_name, path, IMAGE_TOPIC);
+    bool result = camera_handler_ptr->init(frame_rate,CAMERA_IP);
     
     if (result) 
     {

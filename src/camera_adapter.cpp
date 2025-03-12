@@ -25,9 +25,10 @@ std::string getTimeTag() {
     return oss.str();
 }
 
-bool MultiespectralAcquireT::init(int frame_rate)
+bool MultiespectralAcquireT::init(int frame_rate, std::string camera_ip)
 {
-    bool result = initCamera(frame_rate);
+    bool result = initCamera(frame_rate, camera_ip);
+    this->camera_ip = camera_ip;
     ROS_FATAL_STREAM_COND(!result, "[MAT] Could not initialize " << getName() << " camera.");
     return result;
 }
@@ -36,14 +37,15 @@ bool MultiespectralAcquireT::changeFrameRate(int frame_rate)
 {
     ROS_INFO_STREAM("[MAT::changeFrameRate] Closing camera to setup new frame rate to: " << frame_rate);
     bool result = closeCamera();
-    this->init(frame_rate);
+    this->init(frame_rate, this->camera_ip);
 }
 
 
-MultiespectralAcquireT::MultiespectralAcquireT(std::string img_path) : img_path(img_path)
+MultiespectralAcquireT::MultiespectralAcquireT(std::string img_path, std::string topic_name) : img_path(img_path), topic_name(topic_name)
 {
     image_transport::ImageTransport it(nh_);
-    image_pub_ = it.advertise(getType()+"_image", 1);
+    ROS_INFO_STREAM("[MAT] Images for  " << getName() << " camera will be published to topic: " << topic_name);
+    image_pub_ = it.advertise(topic_name, 1);
 }
 
 MultiespectralAcquireT::~MultiespectralAcquireT(void)

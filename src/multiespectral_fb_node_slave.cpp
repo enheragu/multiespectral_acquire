@@ -10,6 +10,8 @@
 #include "camera_adapter.h"
 #include <multiespectral_fb/ImageRequest.h>
 std::string IMAGE_PATH; 
+std::string IMAGE_TOPIC;
+std::string CAMERA_IP;
 
 // class MultiespectralAcquire;
 // std::shared_ptr<MultiespectralAcquire> camera_handler_ptr;
@@ -27,17 +29,17 @@ protected:
     size_t buffer_size = 1; // Tamaño del buffer 
 
 public:
-    MultiespectralAcquire(std::string name, std::string img_path): MultiespectralAcquireT(img_path)
+    MultiespectralAcquire(std::string name, std::string img_path, std::string topic_name): MultiespectralAcquireT(img_path, topic_name)
     {
         service_ = nh_.advertiseService("multiespectral_slave_service", &MultiespectralAcquire::service_cb, this);
     }
 
-    bool init(int frame_rate)
+    bool init(int frame_rate, std::string camera_ip)
     {
         current_frame_rate = frame_rate;
         this->buffer_size = (int(FLIR_FRAME_RATE/current_frame_rate) + 1)*3;
         
-        bool result = MultiespectralAcquireT::init(frame_rate);
+        bool result = MultiespectralAcquireT::init(frame_rate, camera_ip);
         // result = result && setAsSlave();
 
         ROS_FATAL_STREAM_COND(!result, "[MASlave::init] Could not configure " << getName() << " camera as slave.");
@@ -143,15 +145,17 @@ int main(int argc, char **argv)
 
     int frame_rate;
     ros::param::param<std::string>("~dataset_output_path", IMAGE_PATH, "./");
+    ros::param::param<std::string>("~output_topic", IMAGE_TOPIC, getType()+"_image");
     ros::param::param<int>("~frame_rate", frame_rate, 10);
+    ros::param::param<std::string>("~camera_ip", CAMERA_IP, "");
 
     std::string path = IMAGE_PATH+std::string("/")+getType()+std::string("/");
     std::filesystem::create_directories(path);
 
     ROS_INFO_STREAM("[MASlave::main] Images will be stored in path: " << path);
     std::shared_ptr<MultiespectralAcquire> camera_handler_ptr;
-    camera_handler_ptr = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire", path);
-    bool result = camera_handler_ptr->init(frame_rate);
+    camera_handler_ptr = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire", path, IMAGE_TOPIC);
+    bool result = camera_handler_ptr->init(frame_rate, CAMERA_IP);
    
     // if (result) camera_handler_ptr->execute();
     std::thread camera_thread(executeInThread, camera_handler_ptr);

@@ -139,7 +139,7 @@ bool AutoConfigureFlirCamera(int interface_n = 1, int camera_index = 0)
  * @brief Function that handle all Basler initializacion and configuration.
  * @return true or false depending on image acquisition
  */
-bool initCamera(int frame_rate)
+bool initCamera(int frame_rate, std::string camera_ip)
 {   
     // Reste cameras to a IP range compatible
     // AutoConfigureFlirCamera();
@@ -364,7 +364,7 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp)
     Spinnaker::ImagePtr pResultImage = nullptr;
     try
     {
-        pResultImage = pFlir->GetNextImage(10000);
+        pResultImage = pFlir->GetNextImage(2000);
         if (!pResultImage)
         {
             std::cout << "[FlirAdapter::acquireImage] No grab result reference." << std::endl;

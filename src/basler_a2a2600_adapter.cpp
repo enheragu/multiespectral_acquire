@@ -10,8 +10,8 @@
 
 // Basler API
 #include <pylon/PylonIncludes.h>
-#include "acA1600_60gc_pylon_gen/BaslerCamera.h"
-#include "acA1600_60gc_pylon_gen/BaslerCameraArray.h"
+#include "a2A2600_20gcBAS_pylon_gen/BaslerCamera.h"
+#include "a2A2600_20gcBAS_pylon_gen/BaslerCameraArray.h"
 
 #include "camera_adapter.h"
 
@@ -98,23 +98,68 @@ bool initCamera(int frame_rate, std::string camera_ip)
             std::cerr << "[BaslerAdapter::initCamera] Opening camera with: " << std::endl;
             std::cout << "\t\t· Model Name " << pBasler->GetDeviceInfo().GetModelName() << std::endl;
             std::cout << "\t\t· Friendly Name: " << pBasler->GetDeviceInfo().GetFriendlyName() << std::endl;
-            std::cout << "\t\t· Current IP Addr: " << pBasler->GevCurrentIPAddress.ToStringOrDefault("<not readable>") << std::endl;
             std::cout << "\t\t· Requested IP: " << camera_ip << std::endl;
         }
 
         pBasler->Open();
+        
+        // pBasler->Height.TrySetToMaximum();
+        // pBasler->OffsetX.TrySetToMinimum();
+        // pBasler->OffsetY.TrySetToMinimum();
+        // pBasler->Width.TrySetToMaximum();
+        
+        // GenApi::CEnumerationPtr(pBasler->GetNodeMap().GetNode("AcquisitionMode"))->FromString("Continuous");
+        // GenApi::CEnumerationPtr triggerMode = pBasler->GetNodeMap().GetNode("TriggerMode");
+
+        // GenApi::CEnumerationPtr(pBasler->GetNodeMap().GetNode("AcquisitionMode"))->FromString("Continuous");
+
+
+        // GenApi::CEnumerationPtr triggerMode = pBasler->GetNodeMap().GetNode("TriggerMode");
+        // CHECK_AW(triggerMode);
+        // triggerMode->FromString("Off");
+
+        // GenApi::CEnumerationPtr triggerSource = pBasler->GetNodeMap().GetNode("TriggerSource");
+        // CHECK_AW(triggerSource);
+        // triggerSource->FromString("Software");
+
+        // GenApi::CEnumerationPtr triggerSelector = pBasler->GetNodeMap().GetNode("TriggerSelector");
+        // CHECK_AW(triggerSelector);
+        // triggerSelector->FromString("FrameStart");
+
+
+        // CHECK_ARW(pBasler->ExposureAuto);
+        // pBasler->ExposureAuto.SetValue(Pylon::BaslerCameraCameraParams_Params::ExposureAuto_Continuous);
+        // std::cout << "pBasler->ExposureAuto = " << pBasler->ExposureAuto.ToStringOrDefault("<not readable>") << std::endl;
+        // CHECK_ARW(pBasler->ExposureMode);
+        // pBasler->ExposureMode.SetValue(Pylon::BaslerCameraCameraParams_Params::ExposureMode_Timed);
+        // std::cout << "pBasler->ExposureMode = " << pBasler->ExposureMode.ToStringOrDefault("<not readable>") << std::endl;
 
         // With autoexposure the camera is not triggering?¿
-        // Enable Auto Exposure (set to Continuous mode)
-        CHECK_ARW(pBasler->ExposureAuto)
-        pBasler->ExposureAuto.SetIntValue(Pylon::BaslerCameraCameraParams_Params::ExposureAuto_Continuous);
+        // Enable Auto Exposure (set to Continuous mode) Need to reconfigure these other values to 
+        // be able to set autoexposure
+        // CHECK_ARW(pBasler->AutoExposureTimeLowerLimit);
+        // pBasler->AutoExposureTimeLowerLimit.SetValue(100.0f);
+        // pBasler->AutoExposureTimeUpperLimit.SetValue(100000.0f);
+
+        // CHECK_ARW(pBasler->AutoTargetBrightness);
+        // pBasler->AutoTargetBrightness.SetValue(0.8f);
+       
+        GenApi::CEnumerationPtr(pBasler->GetNodeMap().GetNode("TriggerMode"))->FromString("Off");
+        pBasler->AcquisitionMode.TrySetValue( Pylon::BaslerCameraCameraParams_Params::AcquisitionMode_Continuous );
+        
+        CHECK_ARW(pBasler->ExposureAuto);
+        pBasler->ExposureAuto.SetValue(Pylon::BaslerCameraCameraParams_Params::ExposureAuto_Continuous);
         std::cout << "[BaslerAdapter::initCamera] Autoexposure enabled in continuous mode." << std::endl;
 
         pBasler->AcquisitionFrameRateEnable.SetValue(true);
-        pBasler->AcquisitionFrameRateAbs.SetValue(frame_rate);
+        pBasler->AcquisitionFrameRate.SetValue(frame_rate);
 
         // Enable PTP and set camera as slave
         // pBasler->GevIEEE1588.SetValue(true);
+
+        std::cout << "pBasler->AcquisitionMode = " << pBasler->AcquisitionMode.ToStringOrDefault("<not readable>") << std::endl;
+        std::cout << "pBasler->TriggerMode = " << pBasler->TriggerMode.ToStringOrDefault("<not readable>") << std::endl;
+        std::cout << "pBasler->TriggerSelector = " << pBasler->TriggerSelector.ToStringOrDefault("<not readable>") << std::endl;
 
         return true;
     }
@@ -154,35 +199,6 @@ bool setAsMaster()
 {
     std::cout << "No master configuration for now :)" << std::endl;
     return true;
-
-    CHECK_POINTER(pBasler);
-    try
-    {
-        // Select Line 2 (output line)
-        CHECK_AW(pBasler->LineSelector);
-        pBasler->LineSelector.SetValue(Pylon::BaslerCameraCameraParams_Params::LineSelector_Out1);
-
-        // Set it as output
-        CHECK_AW(pBasler->LineMode);
-        pBasler->LineMode.SetValue(Pylon::BaslerCameraCameraParams_Params::LineMode_Output);
-
-        // Set the source signal to User Output 1
-        CHECK_AW(pBasler->LineSource);
-        pBasler->LineSource.SetValue(Pylon::BaslerCameraCameraParams_Params::LineSource_ExposureActive);
-    }
-    catch (const Pylon::GenericException &e)
-    {
-        // Error handling.
-        std::cerr << "[BaslerAdapter::setAsMaster] Pylon exception: " << e.GetDescription() << std::endl;
-        return false;
-    }
-
-    // Setup continuous acquisition as trigger
-    // In theory continuous acquisition is already set by default
-    // pBasler->AcquisitionMode.TrySetValue( Pylon::BaslerCameraCameraParams_Params::AcquisitionMode_Continuous );
-    std::cout << "[BaslerAdapter::setAsMaster] Configured internal trigger and signal output." << std::endl;
-
-    return true;   
 }
 
 /**
@@ -252,6 +268,62 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp)
     }
     return true;   
 }
+
+
+// bool acquireImage(cv::Mat& image, uint64_t& timestamp)
+// {
+//     try
+//     {
+//         // Ensure grabbing is stopped if it was previously started
+//         if (pBasler->IsGrabbing())
+//         {
+//             pBasler->StopGrabbing();
+//         }
+
+//         // Start grabbing
+//         pBasler->StartGrabbing(1); // Grab one frame
+
+//         // Wait for grab result
+//         Pylon::CGrabResultPtr ptrGrabResult;
+//         // This smart pointer will receive the grab result data.
+//         cv::Mat openCvImage;
+//         Pylon::CImageFormatConverter formatConverter;
+//         formatConverter.OutputPixelFormat = Pylon::PixelType_BGR8packed;
+//         Pylon::CPylonImage pylonImage;
+
+//         if (pBasler->RetrieveResult(5000, ptrGrabResult, Pylon::TimeoutHandling_ThrowException))
+//         {
+//             // Process the image
+//             if (ptrGrabResult->GrabSucceeded())
+//             {
+//                 // Access the image data.
+//                 const uint8_t *pImageBuffer = (uint8_t *) ptrGrabResult->GetBuffer();
+
+//                 formatConverter.Convert(pylonImage, ptrGrabResult);
+//                 // needs to be cloned so to not keep pointing to local raw data that will be destroyed after function finishes
+//                 image = cv::Mat(ptrGrabResult->GetHeight(), ptrGrabResult->GetWidth(), CV_8UC3, (uint8_t *)pylonImage.GetBuffer()).clone();
+//                 timestamp = ptrGrabResult->GetTimeStamp();
+//                 return true;
+//             }
+//             else
+//             {
+//                 std::cerr << "[BaslerAdapter::acquireImage] Grab failed." << std::endl;
+//                 return false;
+//             }
+//         }
+//         else
+//         {
+//             std::cerr << "[BaslerAdapter::acquireImage] Grab timed out." << std::endl;
+//             return false;
+//         }
+//     }
+//     catch (const Pylon::GenericException &e)
+//     {
+//         std::cerr << "[BaslerAdapter::acquireImage] Pylon exception: " << e.GetDescription() << std::endl;
+//         return false;
+//     }
+// }
+
 
 /**
  * @brief Function that handle all camera de-initializacoin, port closing and Pylon clean finishing.
