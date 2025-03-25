@@ -142,7 +142,7 @@ int main(int argc, char** argv)
 
     ROS_INFO_STREAM("[MAMaster::"<<getType()<<"::main] Images will be stored in path: " << path);
     std::shared_ptr<MultiespectralAcquire> camera_handler_ptr;
-    camera_handler_ptr = std::make_shared<MultiespectralAcquire>("MultiespectralA" + node_name, path, IMAGE_TOPIC);
+    camera_handler_ptr = std::make_shared<MultiespectralAcquire>("AS", path, IMAGE_TOPIC);
     bool result = camera_handler_ptr->init(frame_rate,CAMERA_IP);
     
     if (result) 

@@ -145,7 +145,7 @@ int main(int argc, char **argv)
 
     int frame_rate;
     ros::param::param<std::string>("~dataset_output_path", IMAGE_PATH, "./");
-    ros::param::param<std::string>("~output_topic", IMAGE_TOPIC, getType()+"_image");
+    ros::param::param<std::string>("~image_topic", IMAGE_TOPIC, getType()+"_image");
     ros::param::param<int>("~frame_rate", frame_rate, 10);
     ros::param::param<std::string>("~camera_ip", CAMERA_IP, "");
 

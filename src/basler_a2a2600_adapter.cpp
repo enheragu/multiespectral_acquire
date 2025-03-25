@@ -64,6 +64,7 @@ std::string getType()
     return "visible";
 }
 
+
 /**
  * @brief Function that handle all Pylon and Camera initializacion and configuration.
  * @param frame_rate frames per second to capture with camera
@@ -75,10 +76,45 @@ bool initCamera(int frame_rate, std::string camera_ip)
     {
         // Before using any pylon methods, the pylon runtime must be initialized. 
         Pylon::PylonInitialize();
-        //Basler with IP: '192.168.4.5'
+        // Basler with IP: '192.168.4.5'
         // This takes first abailable
-        pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(Pylon::CTlFactory::GetInstance().CreateFirstDevice()));
+        // pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(Pylon::CTlFactory::GetInstance().CreateFirstDevice()));
         
+
+        Pylon::CTlFactory& tl_factory = Pylon::CTlFactory::GetInstance();
+        Pylon::DeviceInfoList_t device_list;
+        
+        if (0 == tl_factory.EnumerateDevices(device_list))
+        {
+            std::cerr << "[BaslerAdapter::initCamera] No available camera devices.";
+            return false;
+        }
+        else
+        {
+            bool found_desired_device = false;
+            Pylon::DeviceInfoList_t::const_iterator it;
+            for (it = device_list.begin(); it != device_list.end(); ++it)
+            {
+                std::string device_ip_found(it->GetIpAddress());
+                if (0 == camera_ip.compare(device_ip_found))
+                {
+                    std::cout << "[BaslerAdapter::initCamera] Found camera device:"
+                    << " Device Model: " << it->GetModelName() << "; "
+                    << " with Device User Id: " << it->GetUserDefinedName();
+                    
+                    pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(tl_factory.CreateDevice(*it)));
+                    found_desired_device = true;
+                    break;
+                }
+            }
+
+            if (!found_desired_device)
+            {
+                std::cerr << "[BaslerAdapter::initCamera] Could not found camera with id: " << camera_ip << std::endl;
+                return false;
+            }
+        }
+
         // Not working :( creates camera that cannot get images
         // This access it by IP
         // Pylon::CTlFactory& tlFactory = Pylon::CTlFactory::GetInstance(); 
@@ -98,6 +134,7 @@ bool initCamera(int frame_rate, std::string camera_ip)
             std::cerr << "[BaslerAdapter::initCamera] Opening camera with: " << std::endl;
             std::cout << "\t\t· Model Name " << pBasler->GetDeviceInfo().GetModelName() << std::endl;
             std::cout << "\t\t· Friendly Name: " << pBasler->GetDeviceInfo().GetFriendlyName() << std::endl;
+            std::cout << "\t\t· IP configured: " << pBasler->GetDeviceInfo().GetIpAddress() << std::endl;
             std::cout << "\t\t· Requested IP: " << camera_ip << std::endl;
         }
 

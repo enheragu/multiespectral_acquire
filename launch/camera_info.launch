@@ -1,0 +1,32 @@
+<launch>
+    <arg name="frame_rate" default="2"/>
+
+	<group ns="Multiespectral">
+        <node pkg="multiespectral_fb" type="camera_info_publisher.py" name="visible_camera_info" output="screen">
+            <param name="image_topic" value="Multiespectral/visible_camera" />
+            <param name="calibration" value="$(find multiespectral_fb)/conf/visible_params.yaml" />
+            <param name="frame_rate" value="$(arg frame_rate)"/>  
+        </node>
+
+        <node pkg="multiespectral_fb" type="camera_info_publisher.py" name="lwir_camera_info" output="screen">
+            <param name="image_topic" value="Multiespectral/lwir_camera" />
+            <param name="calibration" value="$(find multiespectral_fb)/conf/lwir_params.yaml" />
+            <param name="frame_rate" value="$(arg frame_rate)"/>  
+        </node> 
+        
+
+        <node pkg="aruco_detect" type="aruco_detect" name="aruco_detect" output="screen">
+            <param name="dictionary" value="0" />          <!-- DICT_4X4_50 -->
+            <param name="fiducial_len" value="0.21" />
+            <param name="publish_images" value="true" />
+
+            <param name="adaptiveThreshConstant" value="7" />
+            <param name="adaptiveThreshWinSizeMin" value="5" />
+            <param name="adaptiveThreshWinSizeMax" value="61" />
+            <param name="adaptiveThreshWinSizeStep" value="6" />
+
+            <remap from="/camera/image_raw" to="/Multiespectral/visible_camera" />
+            <remap from="/camera_info" to="/Multiespectral/visible_camera/camera_info" />
+        </node>
+    </group>
+</launch>

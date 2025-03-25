@@ -5,24 +5,34 @@
     <arg name="frame_rate" default="2"/>
 
     <!-- IMPORTANT: NEED TO START FLIR FIRST -->
-    <node pkg="multiespectral_fb" type="flir_slave" name="flir_multiespectral" output="screen">
-        <param name="dataset_output_path" value="$(arg dataset_output_path)"/>  
-        <param name="frame_rate" value="$(arg frame_rate)"/>  
-    </node>
+	<group ns="Multiespectral">
+        <node pkg="multiespectral_fb" type="flir_slave" name="lwir_camera" output="screen">
+            <param name="dataset_output_path" value="$(arg dataset_output_path)"/>  
+            <param name="frame_rate" value="$(arg frame_rate)"/>  
+            <param name="image_topic" value="lwir_camera" />
+        </node>
 
-    <node pkg="multiespectral_fb" type="basler_master" name="basler_multiespectral" output="screen">
-        <param name="dataset_output_path" value="$(arg dataset_output_path)"/>  
-        <param name="camera_ip" value="169.254.165.5"/>
-        <param name="frame_rate" value="$(arg frame_rate)"/>  
-    </node>
+        <node pkg="multiespectral_fb" type="basler_master" name="visible_camera" output="screen">
+            <param name="dataset_output_path" value="$(arg dataset_output_path)"/>  
+            <param name="camera_ip" value="169.254.165.5"/>
+            <param name="frame_rate" value="$(arg frame_rate)"/>  
+            <param name="image_topic" value="visible_camera" />
+        </node>
 
-    <node pkg="multiespectral_fb" type="multiespectral_control.py" name="multiespectral_control" output="screen"/>
-    <!-- <node pkg="multiespectral_fb" type="multiespectral_control.py" name="multiespectral_control" output="screen"/> -->
-    
+        <!-- <node pkg="multiespectral_fb" type="multiespectral_control.py" name="control_gui" output="screen"/> -->
+        
+        <!-- Camera info publication-->
+        <node pkg="multiespectral_fb" type="camera_info_publisher.py" name="visible_camera_info" output="screen">
+            <param name="image_topic" value="visible_camera" />
+            <param name="calibration" value="$(find multiespectral_fb)/conf/visible_params.yaml" />
+            <param name="frame_rate" value="$(arg frame_rate)"/>  
+        </node>
 
-	<!-- <node pkg="multiespectral_fb" type="flir_slave" name="flir_multiespectral" output="screen">
-        <param name="dataset_output_path" value="$(arg dataset_output_path)"/>  
-        <param name="frame_rate" value="$(arg frame_rate)"/>  
-	</node> -->
+        <node pkg="multiespectral_fb" type="camera_info_publisher.py" name="lwir_camera_info" output="screen">
+            <param name="image_topic" value="lwir_camera" />
+            <param name="calibration" value="$(find multiespectral_fb)/conf/lwir_params.yaml" />
+            <param name="frame_rate" value="$(arg frame_rate)"/>  
+        </node> 
+    </group>
 	
  </launch>

@@ -68,10 +68,12 @@ def manifest():
 
 def sigint_handler(sig, frame):
     print("[MultiespectralAcquireGui] SIGINT received, closing application.")
-    global camera_handler
+    global camera_handler, socketio
     if camera_handler:
         camera_handler.stop()
-    os._exit(0)
+    
+    socketio.stop()
+    exit(0)
 
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, sigint_handler)

@@ -27,9 +27,9 @@ store_in_drive = False
 camera_handler = None
 
 flir_ac_name = "MultiespectralAcquire_lwir"
-basler_ac_name = "/MultiespectralA/basler_multiespectral"
-flir_topic_name = "/lwir_image/compressed"
-basler_topic_name = "/visible_image/compressed"
+basler_ac_name = "MultiespectralAC/basler_multiespectral"
+flir_topic_name = "Multiespectral/lwir_camera/compressed"
+basler_topic_name = "Multiespectral/visible_camera/compressed"
 image_size = {'lwir': (640, 480), 'rgb': (640, 480)}
 
 bridge = CvBridge()
