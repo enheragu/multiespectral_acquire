@@ -27,9 +27,9 @@ store_in_drive = False
 camera_handler = None
 
 flir_ac_name = "MultiespectralAcquire_lwir"
-basler_ac_name = "MultiespectralAC/basler_multiespectral"
-flir_topic_name = "Multiespectral/lwir_camera/compressed"
-basler_topic_name = "Multiespectral/visible_camera/compressed"
+basler_ac_name = "AS"
+flir_topic_name = "lwir_camera/compressed"
+basler_topic_name = "visible_camera/compressed"
 image_size = {'lwir': (640, 480), 'rgb': (640, 480)}
 
 bridge = CvBridge()
@@ -51,7 +51,7 @@ class RosMultiespectralAcquire:
         self.client = []
         for ac_name in ac_subs_list:
             self.client.append(actionlib.SimpleActionClient(ac_name, multiespectral_fb.msg.MultiespectralAcquisitionAction))
-            rospy.loginfo(f'Result: Wait for {ac_name} server')
+            rospy.loginfo(f'Wait for {ac_name} server')
             self.client[-1].wait_for_server()
 
         # Suscribirse a los topics de imagen
