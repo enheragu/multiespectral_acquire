@@ -258,7 +258,7 @@ bool setAsSlave()
  * @param image CV mat reference to be filled with image
  * @return true or false depending on image acquisition
  */
-bool acquireImage(cv::Mat& image, uint64_t& timestamp)
+bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
 {
     
     CHECK_POINTER(pBasler);

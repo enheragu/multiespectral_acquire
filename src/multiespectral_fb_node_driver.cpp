@@ -56,7 +56,8 @@ public:
         {
             cv::Mat curr_image;
             uint64_t timestamp;
-            result = this->grabStoreImage(curr_image, timestamp, false);
+            ImageMetadata metadata;
+            result = this->grabStoreImage(curr_image, timestamp, metadata, false);
             
             ros::spinOnce();
             loop_rate.sleep();
@@ -85,7 +86,7 @@ int main(int argc, char **argv)
     ros::param::param<int>("~frame_rate", frame_rate, 10);
     ros::param::param<std::string>("~camera_ip", CAMERA_IP, "");
 
-    std::string path = IMAGE_PATH+std::string("/")+getType()+std::string("/");
+    std::string path = IMAGE_PATH+std::string("/")+getFolderTimetag()+std::string("/")+getType()+std::string("/");
     std::filesystem::create_directories(path);
 
     ROS_INFO_STREAM("[MASlave::main] Images will be stored in path: " << path);

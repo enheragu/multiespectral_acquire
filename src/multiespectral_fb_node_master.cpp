@@ -83,8 +83,9 @@ public:
         {
             cv::Mat curr_image;
             uint64_t timestamp;
+            ImageMetadata metadata;
             // ROS_INFO("[MAMaster::executeCB] Grabbing image.");
-            result = this->grabStoreImage(curr_image, timestamp, goal->store);
+            result = this->grabStoreImage(curr_image, timestamp, metadata, goal->store);
             if (result) 
             {
                 feedback_.images_acquired = feedback_.images_acquired + 1;
@@ -137,8 +138,8 @@ int main(int argc, char** argv)
     ros::param::param<std::string>("~image_topic", IMAGE_TOPIC, getType()+"_image");
     ros::param::param<std::string>("~camera_ip", CAMERA_IP, "");
 
-    std::string path = IMAGE_PATH+std::string("/")+getType()+std::string("/");
-    std::filesystem::create_directories(IMAGE_PATH+std::string("/")+getType());
+    std::string path = IMAGE_PATH+std::string("/")+getFolderTimetag()+std::string("/")+getType()+std::string("/");
+    std::filesystem::create_directories(path);
 
     ROS_INFO_STREAM("[MAMaster::"<<getType()<<"::main] Images will be stored in path: " << path);
     std::shared_ptr<MultiespectralAcquire> camera_handler_ptr;

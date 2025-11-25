@@ -107,11 +107,46 @@ bool initCamera(int frame_rate, std::string camera_ip)
         // With autoexposure the camera is not triggering?¿
         // Enable Auto Exposure (set to Continuous mode)
         CHECK_ARW(pBasler->ExposureAuto)
-        pBasler->ExposureAuto.SetIntValue(Pylon::BaslerCameraCameraParams_Params::ExposureAuto_Continuous);
         std::cout << "[BaslerAdapter::initCamera] Autoexposure enabled in continuous mode." << std::endl;
+        pBasler->ExposureAuto.SetValue(Pylon::BaslerCameraCameraParams_Params::ExposureAuto_Continuous);
+        // ExposureAutoEnums e = camera.ExposureAuto.GetValue();
+        CHECK_ARW(pBasler->AutoTargetValue)
+        pBasler->AutoTargetValue.SetValue(70);
+        std::cout << "[BaslerAdapter::initCamera] Current autoexposure set to target value: " << pBasler->AutoTargetValue.GetValue() << std::endl;
+        // To set a fixed exposure time, disable auto exposure and set exposure time manually
+        
+        CHECK_ARW(pBasler->BalanceWhiteAuto)
+        std::cout << "[BaslerAdapter::initCamera] Auto Balance White enabled in continuous mode." << std::endl;
+        pBasler->BalanceWhiteAuto.SetValue(Pylon::BaslerCameraCameraParams_Params::BalanceWhiteAuto_Continuous);
+
 
         pBasler->AcquisitionFrameRateEnable.SetValue(true);
         pBasler->AcquisitionFrameRateAbs.SetValue(frame_rate);
+
+        ////////////////////////////////////
+        //  Metadata extraction enabling  //
+        ////////////////////////////////////
+
+        // GenApi::StringList_t entries;
+        // pBasler->ChunkSelector.GetSymbolics(entries);
+        // std::cout << "Chunks disponibles:" << std::endl;
+        // for (auto &entry : entries)
+        //     std::cout << " - " << entry << std::endl;
+
+        CHECK_ARW(pBasler->ChunkModeActive);
+        pBasler->ChunkModeActive.SetValue(true);
+
+        pBasler->ChunkSelector.SetValue("Timestamp");
+        pBasler->ChunkEnable.SetValue(true);
+
+        pBasler->ChunkSelector.SetValue("Framecounter");
+        pBasler->ChunkEnable.SetValue(true);
+
+        pBasler->ChunkSelector.SetValue("ExposureTime");
+        pBasler->ChunkEnable.SetValue(true);
+
+        pBasler->ChunkSelector.SetValue("GainAll");
+        pBasler->ChunkEnable.SetValue(true);
 
         // Enable PTP and set camera as slave
         // pBasler->GevIEEE1588.SetValue(true);
@@ -205,7 +240,7 @@ bool setAsSlave()
  * @param image CV mat reference to be filled with image
  * @return true or false depending on image acquisition
  */
-bool acquireImage(cv::Mat& image, uint64_t& timestamp)
+bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
 {
     
     CHECK_POINTER(pBasler);
@@ -237,6 +272,60 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp)
             // needs to be cloned so to not keep pointing to local raw data that will be destroyed after function finishes
             image = cv::Mat(ptrGrabResult->GetHeight(), ptrGrabResult->GetWidth(), CV_8UC3, (uint8_t *)pylonImage.GetBuffer()).clone();
             timestamp = ptrGrabResult->GetTimeStamp();
+
+            /*****************************************
+            **   Extract metadata from chunk data   **
+            ******************************************/
+            metadata.width = ptrGrabResult->GetWidth();
+            metadata.height = ptrGrabResult->GetHeight();
+            metadata.pixelFormat = ptrGrabResult->GetPixelType();
+
+            GenApi::INodeMap& chunkDataMap = ptrGrabResult->GetChunkDataNodeMap();
+
+            // Timestamp
+            GenApi::CIntegerPtr chunkTimestamp(chunkDataMap.GetNode("ChunkTimestamp"));
+            if (GenApi::IsReadable(chunkTimestamp))
+            {
+                int64_t ts = chunkTimestamp->GetValue();
+                // std::cout << "Timestamp: " << ts << std::endl;
+                metadata.timestamp = ts;
+            }
+        
+            // Framecounter
+            GenApi::CIntegerPtr chunkFrameCounter(chunkDataMap.GetNode("ChunkFramecounter"));
+            if (GenApi::IsReadable(chunkFrameCounter))
+            {
+                int64_t frameCounter = chunkFrameCounter->GetValue();
+                // std::cout << "Frame #: " << frameCounter << std::endl;
+                metadata.frameCounter = frameCounter;
+            }
+        
+            // ExposureTime
+            GenApi::CFloatPtr chunkExposure(chunkDataMap.GetNode("ChunkExposureTime"));
+            if (GenApi::IsReadable(chunkExposure))
+            {
+                double exposure = chunkExposure->GetValue();
+                // std::cout << "Exposure: " << exposure << " µs" << std::endl;
+                metadata.exposureTime = exposure;
+            }
+        
+            // GainAll
+            GenApi::CFloatPtr chunkGain(chunkDataMap.GetNode("ChunkGainAll"));
+            if (GenApi::IsReadable(chunkGain))
+            {
+                double gain = chunkGain->GetValue();
+                // std::cout << "GainAll: " << gain << " dB" << std::endl;
+                metadata.gainAll = gain;
+            }
+
+            // Gain
+            GenApi::CFloatPtr gainNode(pBasler->GetNodeMap().GetNode("Gain"));
+            if (GenApi::IsReadable(gainNode))
+            {
+                double gain = gainNode->GetValue();
+                // std::cout << "[BaslerAdapter::acquireImage] Gain actual: " << gain << " dB" << std::endl;
+                metadata.gainAll = gain;
+            }
         }
         else
         {

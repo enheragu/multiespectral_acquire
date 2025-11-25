@@ -2,15 +2,29 @@
 
 #include <mutex>
 #include <iostream>
+#include <sstream>
+#include <fstream>
 #include <chrono>
 #include <ctime>
 #include <iomanip>
-#include <sstream>
 
 #include "ros/ros.h"
 
 #include "camera_adapter.h"
 
+
+std::string getFolderTimetag()
+{
+    auto now = std::chrono::system_clock::now();
+    std::time_t timeNow = std::chrono::system_clock::to_time_t(now);
+    
+    std::tm* tmNow = std::localtime(&timeNow);
+
+    std::ostringstream oss;
+    oss << std::put_time(tmNow, "%y-%m-%d_%H-%M");
+
+    return oss.str();
+}
 
 std::string getTimeTag() {
     auto now = std::chrono::system_clock::now();
@@ -24,6 +38,22 @@ std::string getTimeTag() {
 
     return oss.str();
 }
+
+void saveMetadataYaml(const ImageMetadata& meta, const std::string& filename)
+{
+    YAML::Node node;
+    node["timestamp"] = meta.timestamp;
+    node["frameCounter"] = meta.frameCounter;
+    node["exposureTime_us"] = meta.exposureTime;
+    node["gain_dB"] = meta.gainAll;
+    node["width"] = meta.width;
+    node["height"] = meta.height;
+    node["pixelFormat"] = meta.pixelFormat;
+
+    std::ofstream fout(filename);
+    fout << node;
+}
+
 
 bool MultiespectralAcquireT::init(int frame_rate, std::string camera_ip)
 {
@@ -56,10 +86,10 @@ MultiespectralAcquireT::~MultiespectralAcquireT(void)
     ROS_INFO_STREAM_COND(result, "[MAT] Correctly finished " << getName() << " camera.");
 }
 
-bool MultiespectralAcquireT::grabImage(cv::Mat& curr_image, uint64_t& timestamp)
+bool MultiespectralAcquireT::grabImage(cv::Mat& curr_image, uint64_t& timestamp, ImageMetadata& metadata)
 {
     const std::scoped_lock<std::mutex> lock(camera_mutex);
-    bool result =  acquireImage(curr_image, timestamp);
+    bool result =  acquireImage(curr_image, timestamp, metadata);
 
     // TBD use camera timestamp once synchronized
     ros::Time now = ros::Time::now();
@@ -69,14 +99,16 @@ bool MultiespectralAcquireT::grabImage(cv::Mat& curr_image, uint64_t& timestamp)
     return result;
 }
 
-bool MultiespectralAcquireT::StoreImage(cv::Mat& curr_image, uint64_t& timestamp, bool store)
+bool MultiespectralAcquireT::StoreImage(cv::Mat& curr_image, uint64_t& timestamp, ImageMetadata& metadata, bool store)
 {
     const std::scoped_lock<std::mutex> lock(camera_mutex);
     if (!curr_image.empty() && store) 
     {
         std::ostringstream filename;
-        filename << img_path << "/" << getTimeTag() << "_tcam_" << timestamp << ".png";
-        cv::imwrite(filename.str().c_str(), curr_image);
+        filename << img_path << "/" << getTimeTag() << "_tcam_" << timestamp;
+        cv::imwrite(filename.str().c_str()+std::string(".png"), curr_image);
+
+        saveMetadataYaml(metadata, filename.str().c_str()+std::string(".yaml"));
     } 
     
     // Convert to a sensor_msgs::Image message detecting encoding
@@ -108,12 +140,12 @@ bool MultiespectralAcquireT::StoreImage(cv::Mat& curr_image, uint64_t& timestamp
     return true;
 }
 
-bool MultiespectralAcquireT::grabStoreImage(cv::Mat& curr_image, uint64_t& timestamp, bool store)
+bool MultiespectralAcquireT::grabStoreImage(cv::Mat& curr_image, uint64_t& timestamp, ImageMetadata& metadata, bool store)
 {
     // ROS_INFO("[MAT::grabStoreImage] Grabbing image.");
-    bool result =  grabImage(curr_image, timestamp);
+    bool result =  grabImage(curr_image, timestamp, metadata);
     // ROS_INFO("[MAT::grabStoreImage] Storing image.");
-    result = result && StoreImage(curr_image, timestamp, store);
+    result = result && StoreImage(curr_image, timestamp, metadata, store);
     // ROS_INFO("[MAT::grabStoreImage] Image stored.");
     return result;
 }

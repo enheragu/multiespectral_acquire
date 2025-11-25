@@ -30,7 +30,7 @@ flir_ac_name = "MultiespectralAcquire_lwir"
 basler_ac_name = "AS"
 flir_topic_name = "lwir_camera/compressed"
 basler_topic_name = "visible_camera/compressed"
-image_size = {'lwir': (640, 480), 'rgb': (640, 480)}
+image_size = {'lwir': (320, 240), 'rgb': (320, 240)}
 
 bridge = CvBridge()
 
@@ -147,7 +147,7 @@ class RosMultiespectralAcquire:
                     'frame_rate_lwir': str(frame_rate_lwir),
                     'frame_rate_rgb': str(frame_rate_rgb)
                 })
-            time.sleep(0.5)
+            time.sleep(1)
         
     def convert_image(self, ros_image):
         try:

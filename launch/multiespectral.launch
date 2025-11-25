@@ -1,7 +1,7 @@
 
 <launch>
 
-    <arg name="dataset_output_path" default="/home/administrator/images_eeha"/>
+    <arg name="dataset_output_path" default="/media/administrator/data/images_eeha"/>
     <arg name="frame_rate" default="2"/>
 
     <!-- IMPORTANT: NEED TO START FLIR FIRST -->
