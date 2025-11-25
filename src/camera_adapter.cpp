@@ -42,10 +42,11 @@ std::string getTimeTag() {
 void saveMetadataYaml(const ImageMetadata& meta, const std::string& filename)
 {
     YAML::Node node;
+    node["systemTime"] = meta.systemTime;
     node["timestamp"] = meta.timestamp;
     node["frameCounter"] = meta.frameCounter;
     node["exposureTime_us"] = meta.exposureTime;
-    node["gain_dB"] = meta.gainAll;
+    node["gain_dB"] = meta.gain;
     node["width"] = meta.width;
     node["height"] = meta.height;
     node["pixelFormat"] = meta.pixelFormat;

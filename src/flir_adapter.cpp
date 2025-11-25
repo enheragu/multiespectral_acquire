@@ -388,6 +388,41 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
             unsigned int stride = convertedImage->GetStride();
             image = cv::Mat(rows, cols, (num_channels == 3) ? CV_8UC3 : CV_8UC1, image_data, stride);
             timestamp = convertedImage->GetTimeStamp();
+            
+
+            /**************************
+            **   Extract metadata    **
+            ***************************/
+            metadata.timestamp = convertedImage->GetTimeStamp();
+            metadata.frameCounter = pResultImage->GetFrameID();
+            metadata.width = pResultImage->GetWidth();
+            metadata.height = pResultImage->GetHeight();
+            
+            Spinnaker::GenApi::CEnumerationPtr pixelFormatNode = pFlir->GetNodeMap().GetNode("PixelFormat");
+            if (Spinnaker::GenApi::IsReadable(pixelFormatNode))
+            {
+                Spinnaker::GenApi::CEnumEntryPtr entry = pixelFormatNode->GetCurrentEntry();
+                if (Spinnaker::GenApi::IsReadable(entry))
+                {
+                    std::string pixelFormatName = std::string(entry->GetSymbolic());
+                    metadata.pixelFormat = pixelFormatName;
+                }
+            }
+
+            Spinnaker::GenApi::INodeMap& nodemap = pFlir->GetNodeMap();
+
+            // Exposure
+            Spinnaker::GenApi::CFloatPtr exposureTime = nodemap.GetNode("ExposureTime");
+            if (Spinnaker::GenApi::IsReadable(exposureTime))
+                metadata.exposureTime = exposureTime->GetValue();
+
+            // Gain
+            Spinnaker::GenApi::CFloatPtr gain = nodemap.GetNode("Gain");
+            if (Spinnaker::GenApi::IsReadable(gain))
+                metadata.gain = gain->GetValue();
+
+            metadata.systemTime = getTimeTag();
+
         }      
         pResultImage->Release();  
     }

@@ -15,20 +15,13 @@
 #include <image_transport/image_transport.h>
 
 
-struct ImageMetadata {
-    int64_t timestamp;
-    int64_t frameCounter;
-    double exposureTime;
-    double gainAll;
-    int width;
-    int height;
-    std::string pixelFormat;
-};
 
+struct ImageMetadata;
 void saveMetadataYaml(const ImageMetadata& meta, const std::string& filename);
 
 std::string getName();
 std::string getType();
+std::string getTimeTag();
 std::string getFolderTimetag();
 bool initCamera(int frame_rate, std::string camera_ip);
 bool beginAcquisition();
@@ -38,6 +31,26 @@ bool setAsSlave();
 bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata);
 bool closeCamera();
 
+struct ImageMetadata {
+    int64_t timestamp;
+    int64_t frameCounter;
+    double exposureTime;
+    double gain;
+    int width;
+    int height;
+    std::string pixelFormat;
+    std::string systemTime;
+
+    ImageMetadata()
+    : timestamp(-1),
+      frameCounter(-1),
+      exposureTime(-1.0),
+      gain(-1.0),
+      width(-1),
+      height(-1),
+      pixelFormat("UNSET"),
+      systemTime("UNSET") {}
+};
 
 class MultiespectralAcquireT
 {

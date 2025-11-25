@@ -278,7 +278,13 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
             ******************************************/
             metadata.width = ptrGrabResult->GetWidth();
             metadata.height = ptrGrabResult->GetHeight();
-            metadata.pixelFormat = ptrGrabResult->GetPixelType();
+            
+            GenApi::CEnumerationPtr pixelFormatNode(pBasler->GetNodeMap().GetNode("PixelFormat"));
+            if (GenApi::IsReadable(pixelFormatNode))
+            {
+                std::string pixelFormatName = std::string(pixelFormatNode->GetCurrentEntry()->GetSymbolic());
+                metadata.pixelFormat = pixelFormatName;
+            }
 
             GenApi::INodeMap& chunkDataMap = ptrGrabResult->GetChunkDataNodeMap();
 
@@ -315,7 +321,7 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
             {
                 double gain = chunkGain->GetValue();
                 // std::cout << "GainAll: " << gain << " dB" << std::endl;
-                metadata.gainAll = gain;
+                metadata.gain = gain;
             }
 
             // Gain
@@ -324,8 +330,9 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
             {
                 double gain = gainNode->GetValue();
                 // std::cout << "[BaslerAdapter::acquireImage] Gain actual: " << gain << " dB" << std::endl;
-                metadata.gainAll = gain;
+                metadata.gain = gain;
             }
+            metadata.systemTime = getTimeTag();
         }
         else
         {
