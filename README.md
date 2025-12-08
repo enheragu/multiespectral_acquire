@@ -17,9 +17,3 @@ The python venv can be created inside the workspace but needs to be ignored by c
     pip install -r /multiespectral_acquire_gui/requirements.txt
 ```
 
-To activate it correctly start with generic ROS, then venv and then workspace (command as followed if the ws is in home):
-```sh
-    source /opt/ros/jazzy/setup.bash
-    source ~/ros2_ws/venv/bin/activate
-    source ~/ros2_ws/install/setup.bash
-```

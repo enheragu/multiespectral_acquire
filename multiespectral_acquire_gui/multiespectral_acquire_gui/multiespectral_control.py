@@ -10,15 +10,18 @@ import signal
 
 try: 
     import rclpy 
-    from multiespectral_ros_ac import RosMultiespectralAcquire as MultiespectralAcquire
+    from rclpy.executors import MultiThreadedExecutor
+    from multiespectral_acquire_gui.multiespectral_ros_ac import RosMultiespectralAcquire as MultiespectralAcquire
+    using_ros = True
     print(f"[MultiespectralAcquireGui] Using ROS Multiespectral Acquire.")
 except ImportError: 
-    from multiespectral_dummy_ac import DummyMultiespectralAcquire as MultiespectralAcquire
+    from multiespectral_acquire_gui.multiespectral_dummy_ac import DummyMultiespectralAcquire as MultiespectralAcquire
+    using_ros = False
     print(f"[MultiespectralAcquireGui] No ROS detected. Using Dummy Multiespectral Acquire.")
 
 app = Flask(__name__)
 # socketio = SocketIO(app, cors_allowed_origins="*") # Allow multiple connections from different origins
-socketio = SocketIO(app)
+socketio = SocketIO(app, async_mode='threading')
 
 store_in_drive = False
 camera_handler = None
@@ -72,9 +75,29 @@ def sigint_handler(sig, frame):
     socketio.stop()
     exit(0)
 
-if __name__ == '__main__':
+# ROS expects a main function so here it is...
+def main(args=None):
     signal.signal(signal.SIGINT, sigint_handler)
     print("[MultiespectralAcquireGui] Start camera_handler.")
     camera_handler = MultiespectralAcquire(socketio)
-    print("[MultiespectralAcquireGui] Start Flask app.")
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    if using_ros:
+        executor = MultiThreadedExecutor(num_threads=4)
+        executor.add_node(camera_handler)
+
+        ros_thread = threading.Thread(target=executor.spin, daemon=True)
+        ros_thread.start()
+    
+    try:
+        print("[MultiespectralAcquireGui] Start Flask app.")
+        socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        camera_handler.stop()
+        if using_ros:
+            executor.shutdown()
+            camera_handler.destroy_node()
+            rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

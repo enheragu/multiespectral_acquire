@@ -18,6 +18,7 @@
 #include <sensor_msgs/msg/camera_info.hpp>
 
 
+void createTestPattern(cv::Mat& image);
 
 struct ImageMetadata;
 void saveMetadataYaml(const ImageMetadata& meta, const std::string& filename);
@@ -58,6 +59,8 @@ struct ImageMetadata {
 class MultiespectralAcquireT: public rclcpp::Node
 {
 protected:
+    int frame_rate = 5;
+
     std::string img_path = "";
     std::mutex camera_mutex; // Avoid deinitialization while grabbing image
 
@@ -67,18 +70,23 @@ protected:
     std::string camera_info_cfg;
     std::shared_ptr<camera_info_manager::CameraInfoManager> cinfo_;
     
+    rclcpp::Node::SharedPtr node_handle_;
+    image_transport::ImageTransport it_;    
     image_transport::CameraPublisher image_pub_;
+
 public:
     MultiespectralAcquireT(std::string name);
     ~MultiespectralAcquireT(void);
     bool init(int frame_rate);
     bool grabImage(cv::Mat& curr_image, uint64_t& timestamp, ImageMetadata& metadata);
-    bool StoreImage(cv::Mat& curr_image, uint64_t& timestamp, ImageMetadata& metadata, bool store = true);
+    bool processImage(cv::Mat& curr_image, uint64_t& timestamp, ImageMetadata& metadata, bool store = true);
     bool grabStoreImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata, bool store = true);
     bool changeFrameRate(int frame_rate);
     
     // see function definition
     void dummyCallback(const sensor_msgs::msg::Image::ConstSharedPtr& msg);
+
+    int getFrameRate() const { return frame_rate; }
 };
 
 #endif //CAMERA_ADAPTER_H

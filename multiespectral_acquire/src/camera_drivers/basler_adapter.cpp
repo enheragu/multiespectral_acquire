@@ -53,7 +53,8 @@ std::string getName()
 {
     if(pBasler)
     {
-        camera_name = std::string(pBasler->GetDeviceInfo().GetFriendlyName())+std::string(":")+std::string(pBasler->GetDeviceInfo().GetModelName());
+        // camera_name = std::string(pBasler->GetDeviceInfo().GetFriendlyName())+std::string(":")+std::string(pBasler->GetDeviceInfo().GetModelName());
+        camera_name = std::string("Basler ") + std::string(pBasler->GetDeviceInfo().GetModelName());
     }
     return camera_name;
 }

@@ -14,9 +14,6 @@ def generate_launch_description():
     
     # Namespace Multiespectral
     multiespectral_ns = GroupAction([
-        # SetEnvironmentVariable('RCUTILS_CONSOLE_OUTPUT_FORMAT', '[{time}] [{severity}]: {message}'),
-        # SetEnvironmentVariable('RCUTILS_LOGGING_BUFFERED_STREAM', '1'),
-        # SetEnvironmentVariable('RCUTILS_LOGGING_USE_STDOUT', '1'),
 
         # FLIR LWIR (slave)
         Node(
@@ -29,11 +26,10 @@ def generate_launch_description():
                 'dataset_output_path': LaunchConfiguration('dataset_output_path'),
                 'frame_rate': LaunchConfiguration('frame_rate'),
                 'image_topic': 'lwir_camera',
-                'camera_info_url': PathJoinSubstitution([
+                'camera_info_url': ['file://', PathJoinSubstitution([
                     FindPackageShare('multiespectral_acquire'), 
-                    'conf', 'lwir_params.yaml'])
-            }],
-            emulate_tty=True 
+                    'conf', 'lwir_params.yaml'])]
+            }]
         ),
         
         # Basler visible (master) - IP desde variable de entorno
@@ -48,11 +44,11 @@ def generate_launch_description():
                 'camera_ip': '$(env MULTIESPECTRAL_VISIBLE_IP)',
                 'frame_rate': LaunchConfiguration('frame_rate'),
                 'image_topic': 'visible_camera',
-                'camera_info_url': PathJoinSubstitution([
+                'camera_info_url': ['file://', PathJoinSubstitution([
                     FindPackageShare('multiespectral_acquire'), 
-                    'conf', 'visible_params.yaml'])
-            }],
-            emulate_tty=True 
+                    'conf', 'visible_params.yaml'])]
+            }]
+            # , arguments=['--ros-args', '--log-level', 'DEBUG']
         )
     ])
     

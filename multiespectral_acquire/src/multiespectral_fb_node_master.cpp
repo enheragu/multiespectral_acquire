@@ -36,7 +36,6 @@ protected:
     
     rclcpp_action::Server<MultiespectralAcquisition>::SharedPtr action_server_; 
     std::string action_name_;
-    int current_frame_rate = 0;
 
     rclcpp::Client<ImageRequest>::SharedPtr slave_camera_client_;
 public:
@@ -47,7 +46,7 @@ public:
 
         auto handle_goal = [this](const rclcpp_action::GoalUUID & uuid,std::shared_ptr<const MultiespectralAcquisition::Goal> goal)
             {
-                RCLCPP_INFO(this->get_logger(), "Received goal request with store flag as: %d", goal->store);
+                RCLCPP_INFO(this->get_logger(), "Received goal request with store flag as: %s", goal->store ? "true" : "false");
                 (void)uuid;
                 return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
             };
@@ -69,7 +68,7 @@ public:
 
         this->action_server_ = rclcpp_action::create_server<MultiespectralAcquisition>(
             this,
-            name + "_action",
+            "AS",
             handle_goal,
             handle_cancel,
             handle_accepted);       
@@ -79,14 +78,21 @@ public:
 
     bool init(int frame_rate)
     {
-        current_frame_rate = frame_rate;
+        this->frame_rate = frame_rate;
         bool result = MultiespectralAcquireT::init(frame_rate);
         // result = result && setAsMaster();
 
         if(!result) RCLCPP_FATAL_STREAM(get_logger(),"[MAMaster::init] Could not configure " << getName() << " camera as master.");
-        if(result) RCLCPP_INFO_STREAM(get_logger(),"[MAMaster::init] Initialized " << getName() << " camera as master with "<<current_frame_rate<<"Hz frame rate.");
+        if(result) RCLCPP_INFO_STREAM(get_logger(),"[MAMaster::init] Initialized " << getName() << " camera as master with "<<this->frame_rate<<"Hz frame rate.");
         
         result = result && beginAcquisition();
+        
+        if (!result) 
+        {
+            RCLCPP_FATAL_STREAM(get_logger(),"[MAMaster::MAMaster] Camera init failed");
+            throw std::runtime_error("[MAMaster::MAMaster] Camera init failed");
+        }
+        RCLCPP_INFO_STREAM(get_logger(),"[MAMaster::MAMaster] Camera initialized successfully");
 
         return result;
     }
@@ -99,17 +105,17 @@ public:
 
         action_feedback->images_acquired = 0;
         action_feedback->storage_path = "";
-        RCLCPP_INFO_STREAM(get_logger(),"[MAMaster::executeCB] Start image acquisition loop. " << std::string(goal->store?"S":"Not s") << "toring images. Frame rate is "<<std::to_string(current_frame_rate) << "Hz for camera " << getName() << ".");
+        RCLCPP_INFO_STREAM(get_logger(),"[MAMaster::execute] Start image acquisition loop. " << std::string(goal->store?"S":"Not s") << "toring images. Frame rate is "<<std::to_string(this->frame_rate) << "Hz for camera " << getName() << ".");
 
         if (goal->store)
         {
             action_feedback->storage_path = img_path;
-            RCLCPP_INFO_STREAM(get_logger(),"[MAMaster::executeCB] Storing images to " << img_path);
+            RCLCPP_INFO_STREAM(get_logger(),"[MAMaster::execute] Storing images to " << img_path);
         }
 
         bool result = true;
         
-        rclcpp::Rate loop_rate(current_frame_rate);
+        rclcpp::Rate loop_rate(this->frame_rate);
         while (rclcpp::ok())
         {
             if (goal_handle->is_canceling()) {
@@ -118,7 +124,9 @@ public:
                 return;
             }
 
-            cv::Mat curr_image;
+            cv::Mat curr_image(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));  // Init given pattern to check
+            createTestPattern(curr_image);
+
             uint64_t timestamp;
             ImageMetadata metadata;
             // RCLCPP_INFO("[MAMaster::executeCB] Grabbing image.");
@@ -135,7 +143,7 @@ public:
                 goal_handle->publish_feedback(action_feedback);
             }
 
-            // RCLCPP_INFO("[MAMaster::executeCB] Prepare request for image with timestamp: %lu", timestamp);
+            // RCLCPP_INFO(get_logger(), "[MAMaster::executeCB] Prepare request for image with timestamp: %lu", timestamp);
 
             auto request = std::make_shared<ImageRequest::Request>();
             request->timestamp = timestamp;
@@ -148,18 +156,19 @@ public:
             }
 
             auto future_result = slave_camera_client_->async_send_request(request);
-            if (rclcpp::spin_until_future_complete(this->get_node_base_interface(), future_result) != rclcpp::FutureReturnCode::SUCCESS) {
-                RCLCPP_ERROR(get_logger(), "Slave camera service call failed");
-                goal_handle->abort(action_result);
-                return;
-            }
+            // RCLCPP_INFO(get_logger(), "[MAMaster::executeCB] Sent request request and spin until completed.");
+            // if (rclcpp::spin_until_future_complete(this->get_node_base_interface(), future_result) != rclcpp::FutureReturnCode::SUCCESS) {
+            //     RCLCPP_ERROR(get_logger(), "Slave camera service call failed");
+            //     goal_handle->abort(action_result);
+            //     return;
+            // }
 
-            auto service_result = future_result.get();
-            if (!service_result->success) {
-                RCLCPP_ERROR(get_logger(), "Slave camera service returned failure");
-                goal_handle->abort(action_result);
-                return;
-            }
+            // auto service_result = future_result.get();
+            // if (!service_result->success) {
+            //     RCLCPP_ERROR(get_logger(), "Slave camera service returned failure");
+            //     goal_handle->abort(action_result);
+            //     return;
+            // }
 
             loop_rate.sleep();
         }
@@ -172,7 +181,9 @@ public:
 int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
     rclcpp::NodeOptions options;
-    auto node = std::make_shared<MultiespectralAcquire>("MultiespectralSlaveAcquire_" + getType());
+    std::cout << "[multiespectral_fb_node_master] Starting Multiespectral Acquire Master Node for "<<getType()<<" images." << std::endl;
+    auto node = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire_Master_" + getType());
+    node->init(node->getFrameRate());
     rclcpp::spin(node);
     rclcpp::shutdown();
 }

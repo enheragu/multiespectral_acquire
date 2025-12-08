@@ -10,7 +10,6 @@ import threading
 import numpy as np
 
 import rclpy
-from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from sensor_msgs.msg import Image, CompressedImage
@@ -18,7 +17,7 @@ from sensor_msgs.msg import Image, CompressedImage
 from cv_bridge import CvBridge, CvBridgeError
 
 from multiespectral_acquire.action import MultiespectralAcquisition  # Action
-from FreqCounter import FreqCounter
+from multiespectral_acquire_gui.FreqCounter import FreqCounter
 
 frame_rate_lwir = FreqCounter()
 frame_rate_rgb = FreqCounter()
@@ -29,7 +28,7 @@ rgb_img_storepath = ""
 store_in_drive = False
 camera_handler = None
 
-flir_ac_name = "MultiespectralAcquire_lwir"
+# flir_ac_name = "MultiespectralAcquire_lwir"
 basler_ac_name = "AS"
 flir_topic_name = "lwir_camera/compressed"
 basler_topic_name = "visible_camera/compressed"
@@ -43,7 +42,11 @@ ac_subs_list = [basler_ac_name]  # flir_ac_name,  # FLIR working as slave alread
 
 class RosMultiespectralAcquire(Node):
     def __init__(self, socketio):
+        if not rclpy.ok():
+            rclpy.init()
+
         super().__init__('multiespectral_flask_gui')
+        self.update_socketio_thread = None
 
         self.running = False
         self.socketio = socketio
@@ -52,22 +55,21 @@ class RosMultiespectralAcquire(Node):
         for ac_name in ac_subs_list:
 
             self.client.append(ActionClient(self, MultiespectralAcquisition, ac_name))
-            self.get_logger().info(f'Wait for {ac_name} server')
+            self.get_logger().info(f'Wait for "{ac_name}" server')
             self.client[-1].wait_for_server()
 
         # Suscribirse a los topics de imagen
         self.image_sub1 = self.create_subscription(CompressedImage, flir_topic_name, self.lwir_image_cb, 10)
         self.image_sub2 = self.create_subscription(CompressedImage, basler_topic_name, self.rgb_image_cb, 10)
         
+        try:
+            self.update_socketio_thread = threading.Thread(target=self.updateSocketio)
+            self.update_socketio_thread.start()
+            self.socketio.on('image_size', self.update_image_size)
+        except Exception as e:
+            self.get_logger().error(f"Error initializing socket: {e}")
+            raise e
 
-        self.executor = MultiThreadedExecutor(num_threads=4)
-        self.executor.add_node(self)
-        self.executor_thread = threading.Thread(target=self.executor.spin)
-        self.executor_thread.start()
-
-        self.update_socketio_thread = threading.Thread(target=self.updateSocketio) 
-        self.update_socketio_thread.start()
-        self.socketio.on('image_size', self.update_image_size)
          
     def __del__(self):
         self.shutdown()
@@ -75,9 +77,8 @@ class RosMultiespectralAcquire(Node):
     
     def shutdown(self):        
         self.get_logger().info("[MultiespectralAcquireGui] Destructor")
-        self.executor.shutdown()
-        self.executor_thread.join(timeout=2.0)
-        self.update_socketio_thread.join(timeout=2.0)
+        if self.update_socketio_thread:
+            self.update_socketio_thread.join(timeout=2.0)
         
     def cancelGoal(self):
         for client in self.client:
@@ -99,20 +100,29 @@ class RosMultiespectralAcquire(Node):
 
         self.get_logger().info(f'Send goal with store flag as {store}.')
         for client in self.client:
-            client.send_goal(goal, feedback_cb=self.feedback_cb)
+            future = client.send_goal_async(goal, feedback_callback=self.feedback_cb)
+            future.add_done_callback(self.goal_response_callback)
 
-        for client in self.client:
-            client.wait_for_result()
-            result = client.get_result()
-            self.get_logger().info(f'Finished goal')
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().warn('Goal rejected')
+            return
+        self.get_logger().info('Goal accepted')
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self.result_callback)
 
-    def feedback_cb(self, feedback):
+    def result_callback(self, future):
+        result = future.result().result
+        self.get_logger().info(f'Finished goal: {result}')
+
+    def feedback_cb(self, goal_handle, feedback):
         global lwir_img_storepath, rgb_img_storepath
         # self.get_logger().info(f'Feedback: Images Acquired = {feedback.images_acquired}, Storage Path = {feedback.storage_path}')
-        if 'lwir' in feedback.storage_path:
-            lwir_img_storepath = feedback.storage_path
+        if 'lwir' in feedback.feedback.storage_path:
+            lwir_img_storepath = feedback.feedback.storage_path
         else:
-            rgb_img_storepath = feedback.storage_path
+            rgb_img_storepath = feedback.feedback.storage_path
 
     def update_image_size(self, size_data):
         global image_size
@@ -122,7 +132,9 @@ class RosMultiespectralAcquire(Node):
     def lwir_image_cb(self, msg):
         global lwir_img_path, total_images_received_lwir
         image = self.convert_image(msg)
+        self.get_logger().info("[lwir_image_cb] Called")
         if image is not None:
+            self.get_logger().info("Got new LWIR Image.")
             resized_image = cv2.resize(image, image_size['lwir'])
             filtered_image = cv2.bilateralFilter(resized_image, d=9, sigmaColor=75, sigmaSpace=75)
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -136,7 +148,9 @@ class RosMultiespectralAcquire(Node):
     def rgb_image_cb(self, msg):
         global rgb_img_path, total_images_received_rgb
         image = self.convert_image(msg)
+        self.get_logger().info("[rgb_image_cb] Called")
         if image is not None:
+            self.get_logger().info("Got new RGB Image.")
             resized_image = cv2.resize(image, image_size['rgb'])
             _, rgb_buffer = cv2.imencode('.png', resized_image)
             rgb_img_path = base64.b64encode(rgb_buffer).decode('utf-8')

@@ -12,19 +12,28 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, package_name, 'templates'), glob('templates/*.html')),
+        (os.path.join('share', package_name, 'launch'), 
+         glob('launch/*launch.py')),
+        (os.path.join('share', package_name, 'templates'), 
+         glob('templates/*.html')),
     ],
-    install_requires=['setuptools', 'numpy', 'opencv' 'pyyaml', 'multiespectral_acquire', 'sensor_msgs', 'cv_bridge', 'flask', 'flask_socketio'],
+    install_requires=[
+        'setuptools', 
+        'numpy', 
+        'opencv-python',
+        'pyyaml', 
+        'multiespectral_acquire', 
+        'sensor_msgs', 
+        'cv_bridge', 
+        'flask', 
+        'flask-socketio'
+    ],
     zip_safe=True,
     maintainer='quique',
     maintainer_email='enrique.he.ag@gmail.com',
     description='Flask based GUI to monitor and control multiespectral acquisition from the multispectral_acquire package',
     license='TODO: License declaration',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             f'multiespectral_control = {package_name}.multiespectral_control:main',

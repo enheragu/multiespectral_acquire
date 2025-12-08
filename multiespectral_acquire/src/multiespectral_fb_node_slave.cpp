@@ -4,6 +4,7 @@
 #include <memory>
 #include <filesystem>
 #include <deque>
+#include <algorithm>
 
 #include "rclcpp/rclcpp.hpp"
 
@@ -27,7 +28,6 @@ private:
     rclcpp::TimerBase::SharedPtr timer_;
 
 protected:
-    int current_frame_rate = 0;
     rclcpp::Service<ImageRequest>::SharedPtr service_;
     
     // Circular buffer to store images to select closest with timestamp
@@ -45,11 +45,13 @@ public:
     MultiespectralAcquire(std::string name): MultiespectralAcquireT(name)
     {
         service_ = this->create_service<ImageRequest>("multiespectral_slave_service", std::bind(&MultiespectralAcquire::service_cb, this,std::placeholders::_1, std::placeholders::_2));
+       
     }
 
     bool init(int frame_rate)
     {
-        current_frame_rate = frame_rate;
+        this->frame_rate = frame_rate;
+        int current_frame_rate = std::min(this->frame_rate, 1);
         this->buffer_size = (int(FLIR_FRAME_RATE/current_frame_rate) + 1)*3;
         
         bool result = MultiespectralAcquireT::init(frame_rate);
@@ -66,6 +68,12 @@ public:
             std::chrono::duration<double>(1.0/FLIR_FRAME_RATE),
             std::bind(&MultiespectralAcquire::acquisition_loop, this));
 
+        if (!result) 
+        {
+            RCLCPP_FATAL_STREAM(get_logger(),"[MASlave::MASlave] Camera init failed");
+            throw std::runtime_error("[MASlave::MASlave] Camera init failed");
+        }
+        RCLCPP_INFO_STREAM(get_logger(),"[MASlave::MASlave] Camera initialized successfully");
         return result;
     }
 
@@ -89,7 +97,7 @@ public:
                         std::abs(static_cast<int64_t>(b.timestamp - timestamp));
                 });
 
-            ret = StoreImage(closest_it->image, closest_it->timestamp, closest_it->metadata, request->store);
+            ret = processImage(closest_it->image, closest_it->timestamp, closest_it->metadata, request->store);
             
             double time_diff_s = std::abs(static_cast<int64_t>(closest_it->timestamp - timestamp)) / 1e9; // Nanoseconds to seconds conversion
             RCLCPP_INFO_STREAM(get_logger(),"[MASlave::service_cb] Closest image to Basler has a time difference of " << time_diff_s << " seconds.");
@@ -117,7 +125,8 @@ public:
 private:
     bool acquisition_loop()
     {
-        cv::Mat curr_image;
+        cv::Mat curr_image(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));  // Init given pattern to check
+        createTestPattern(curr_image);
         uint64_t timestamp;
         ImageMetadata metadata;
         bool result = this->grabImage(curr_image, timestamp, metadata);
@@ -135,7 +144,9 @@ private:
 int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
     rclcpp::NodeOptions options;
-    auto node = std::make_shared<MultiespectralAcquire>("MultiespectralSlaveAcquire_" + getType());
+    std::cout << "[multiespectral_fb_node_slave] Starting Multiespectral Acquire Slave Node for "<<getType()<<" images." << std::endl;
+    auto node = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire_Slave_" + getType());
+    node->init(node->getFrameRate());
     rclcpp::spin(node);
     rclcpp::shutdown();
 }

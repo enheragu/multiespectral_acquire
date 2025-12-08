@@ -1,6 +1,0 @@
-
-<launch>    
-	<group ns="Multiespectral">
-        <node pkg="multiespectral_fb" type="multiespectral_control.py" name="control_gui" output="screen"/>
-    </group>
-</launch>

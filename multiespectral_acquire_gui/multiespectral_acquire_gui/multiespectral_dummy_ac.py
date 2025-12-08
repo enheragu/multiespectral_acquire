@@ -6,7 +6,7 @@ import base64
 import time
 import os
 
-from FreqCounter import FreqCounter
+from multiespectral_acquire_gui.FreqCounter import FreqCounter
 
 frame_rate_lwir = FreqCounter()
 frame_rate_rgb = FreqCounter()
