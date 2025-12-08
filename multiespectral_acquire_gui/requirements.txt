@@ -1,0 +1,6 @@
+setuptools
+numpy
+opencv-python
+pyyaml
+flask
+flask-socketio

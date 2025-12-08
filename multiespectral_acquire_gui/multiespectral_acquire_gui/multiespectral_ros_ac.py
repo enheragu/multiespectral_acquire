@@ -2,19 +2,22 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-import os
+
 import time
 import cv2
 import base64
 import threading
 import numpy as np
-from cv_bridge import CvBridge, CvBridgeError
 
-import rospy
-import actionlib
+import rclpy
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from rclpy.action import ActionClient
 from sensor_msgs.msg import Image, CompressedImage
 
-import multiespectral_fb.msg   
+from cv_bridge import CvBridge, CvBridgeError
+
+from multiespectral_acquire.action import MultiespectralAcquisition  # Action
 from FreqCounter import FreqCounter
 
 frame_rate_lwir = FreqCounter()
@@ -34,72 +37,78 @@ image_size = {'lwir': (320, 240), 'rgb': (320, 240)}
 
 bridge = CvBridge()
 
-def ros_spin_thread(): 
-    rospy.spin()
-
 
 # Which actions will be used
 ac_subs_list = [basler_ac_name]  # flir_ac_name,  # FLIR working as slave already :)
 
-class RosMultiespectralAcquire:
+class RosMultiespectralAcquire(Node):
     def __init__(self, socketio):
-        rospy.init_node('multiespectral_flask_gui') 
+        super().__init__('multiespectral_flask_gui')
 
         self.running = False
         self.socketio = socketio
         
         self.client = []
         for ac_name in ac_subs_list:
-            self.client.append(actionlib.SimpleActionClient(ac_name, multiespectral_fb.msg.MultiespectralAcquisitionAction))
-            rospy.loginfo(f'Wait for {ac_name} server')
+
+            self.client.append(ActionClient(self, MultiespectralAcquisition, ac_name))
+            self.get_logger().info(f'Wait for {ac_name} server')
             self.client[-1].wait_for_server()
 
         # Suscribirse a los topics de imagen
-        self.image_sub1 = rospy.Subscriber(flir_topic_name, CompressedImage, self.lwir_image_cb)
-        self.image_sub2 = rospy.Subscriber(basler_topic_name, CompressedImage, self.rgb_image_cb)
+        self.image_sub1 = self.create_subscription(CompressedImage, flir_topic_name, self.lwir_image_cb, 10)
+        self.image_sub2 = self.create_subscription(CompressedImage, basler_topic_name, self.rgb_image_cb, 10)
+        
 
-        self.ros_thread = threading.Thread(target=ros_spin_thread) 
-        self.ros_thread.start()
+        self.executor = MultiThreadedExecutor(num_threads=4)
+        self.executor.add_node(self)
+        self.executor_thread = threading.Thread(target=self.executor.spin)
+        self.executor_thread.start()
 
         self.update_socketio_thread = threading.Thread(target=self.updateSocketio) 
         self.update_socketio_thread.start()
         self.socketio.on('image_size', self.update_image_size)
          
     def __del__(self):
-        rospy.signal_shutdown("[MultiespectralAcquireGui]  Destructor") 
-        self.ros_thread.join()
-        self.update_socketio_thread.join()
+        self.shutdown()
+        rclpy.shutdown()
     
+    def shutdown(self):        
+        self.get_logger().info("[MultiespectralAcquireGui] Destructor")
+        self.executor.shutdown()
+        self.executor_thread.join(timeout=2.0)
+        self.update_socketio_thread.join(timeout=2.0)
+        
     def cancelGoal(self):
         for client in self.client:
             client.cancel_goal()
 
     def stop(self):
-        rospy.loginfo("Stopping image acquisition")
+        self.get_logger().info("Stopping image acquisition")
         self.cancelGoal()
         frame_rate_lwir.stop()
         frame_rate_rgb.stop()
-        rospy.loginfo("Finished image acquisition")
+        self.get_logger().info("Finished image acquisition")
 
     def sendGoal(self, store):
         frame_rate_lwir.start()
         frame_rate_rgb.start()
 
-        goal = multiespectral_fb.msg.MultiespectralAcquisitionGoal()
+        goal = MultiespectralAcquisition.Goal()
         goal.store = store
 
-        rospy.loginfo(f'Send goal with store flag as {store}.')
+        self.get_logger().info(f'Send goal with store flag as {store}.')
         for client in self.client:
             client.send_goal(goal, feedback_cb=self.feedback_cb)
 
         for client in self.client:
             client.wait_for_result()
             result = client.get_result()
-            rospy.loginfo(f'Finished goal')
+            self.get_logger().info(f'Finished goal')
 
     def feedback_cb(self, feedback):
         global lwir_img_storepath, rgb_img_storepath
-        # rospy.loginfo(f'Feedback: Images Acquired = {feedback.images_acquired}, Storage Path = {feedback.storage_path}')
+        # self.get_logger().info(f'Feedback: Images Acquired = {feedback.images_acquired}, Storage Path = {feedback.storage_path}')
         if 'lwir' in feedback.storage_path:
             lwir_img_storepath = feedback.storage_path
         else:
@@ -122,7 +131,7 @@ class RosMultiespectralAcquire:
             lwir_img_path = base64.b64encode(lwir_buffer).decode('utf-8')
             frame_rate_lwir.tick()
         else:
-            rospy.logwarn("Failed to convert LWIR image.")
+            self.get_logger().warn("Failed to convert LWIR image.")
 
     def rgb_image_cb(self, msg):
         global rgb_img_path, total_images_received_rgb
@@ -133,7 +142,7 @@ class RosMultiespectralAcquire:
             rgb_img_path = base64.b64encode(rgb_buffer).decode('utf-8')
             frame_rate_rgb.tick()
         else:
-            rospy.logwarn("Failed to convert RGB image.")
+            self.get_logger().warn("Failed to convert RGB image.")
 
     def updateSocketio(self):
         while True:
@@ -157,7 +166,7 @@ class RosMultiespectralAcquire:
                 elif ros_image.encoding == "bgr8":
                     cv_image = bridge.imgmsg_to_cv2(ros_image, "bgr8")
                 else:
-                    rospy.logwarn(f"Unexpected image encoding: {ros_image.encoding}. Defaulting to 'bgr8'.")
+                    self.get_logger().warn(f"Unexpected image encoding: {ros_image.encoding}. Defaulting to 'bgr8'.")
                     cv_image = bridge.imgmsg_to_cv2(ros_image, "bgr8")
                 return cv_image
             elif isinstance(ros_image, CompressedImage):
@@ -165,8 +174,8 @@ class RosMultiespectralAcquire:
                 cv_image = cv2.imdecode(np_arr, cv2.IMREAD_GRAYSCALE if "mono8" in ros_image.format else cv2.IMREAD_COLOR)
                 return cv_image
             else:
-                rospy.logwarn("Received empty image message.")
+                self.get_logger().warn("Received empty image message.")
                 return None
         except CvBridgeError as e:
-            rospy.logerr(f'CvBridge Error: {e}')
+            self.get_logger().err(f'CvBridge Error: {e}')
             return None

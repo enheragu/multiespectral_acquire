@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-from flask_socketio import SocketIO, emit
 import cv2
 import base64
 import time

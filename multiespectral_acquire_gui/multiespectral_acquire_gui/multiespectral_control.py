@@ -4,15 +4,12 @@
 from flask import Flask, render_template, request, jsonify
 from flask import make_response
 from flask_socketio import SocketIO, emit
-import cv2
-import base64
-import time
+
 import threading
 import signal
-import os
 
 try: 
-    import rospy 
+    import rclpy 
     from multiespectral_ros_ac import RosMultiespectralAcquire as MultiespectralAcquire
     print(f"[MultiespectralAcquireGui] Using ROS Multiespectral Acquire.")
 except ImportError: 

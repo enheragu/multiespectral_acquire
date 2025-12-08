@@ -10,8 +10,10 @@
 
 // Basler API
 #include <pylon/PylonIncludes.h>
-#include "acA1600_60gc_pylon_gen/BaslerCamera.h"
-#include "acA1600_60gc_pylon_gen/BaslerCameraArray.h"
+// #include "acA1600_60gc_pylon_gen/BaslerCamera.h"
+// #include "acA1600_60gc_pylon_gen/BaslerCameraArray.h"
+#include <pylon/PylonIncludes.h>
+#include <pylon/BaslerUniversalInstantCamera.h>
 
 #include "camera_adapter.h"
 
@@ -42,7 +44,7 @@
 }}
 
 // Reference to basler camera to be handled
-std::unique_ptr<Pylon::BaslerCamera> pBasler;
+std::unique_ptr<Pylon::CBaslerUniversalInstantCamera> pBasler;
 std::string camera_name = "Default:acA1600-60gc";
 /**
  * @brief Get name of the camera for logging purposes
@@ -77,7 +79,7 @@ bool initCamera(int frame_rate, std::string camera_ip)
         Pylon::PylonInitialize();
         //Basler with IP: '192.168.4.5'
         // This takes first abailable
-        pBasler = std::unique_ptr<Pylon::BaslerCamera>(new Pylon::BaslerCamera(Pylon::CTlFactory::GetInstance().CreateFirstDevice()));
+        pBasler = std::unique_ptr<Pylon::CBaslerUniversalInstantCamera>(new Pylon::CBaslerUniversalInstantCamera(Pylon::CTlFactory::GetInstance().CreateFirstDevice()));
         
         // Not working :( creates camera that cannot get images
         // This access it by IP
@@ -108,7 +110,7 @@ bool initCamera(int frame_rate, std::string camera_ip)
         // Enable Auto Exposure (set to Continuous mode)
         CHECK_ARW(pBasler->ExposureAuto)
         std::cout << "[BaslerAdapter::initCamera] Autoexposure enabled in continuous mode." << std::endl;
-        pBasler->ExposureAuto.SetValue(Pylon::BaslerCameraCameraParams_Params::ExposureAuto_Continuous);
+        pBasler->ExposureAuto.SetValue(Basler_UniversalCameraParams::ExposureAuto_Continuous);
         // ExposureAutoEnums e = camera.ExposureAuto.GetValue();
         CHECK_ARW(pBasler->AutoTargetValue)
         pBasler->AutoTargetValue.SetValue(70);
@@ -117,7 +119,7 @@ bool initCamera(int frame_rate, std::string camera_ip)
         
         CHECK_ARW(pBasler->BalanceWhiteAuto)
         std::cout << "[BaslerAdapter::initCamera] Auto Balance White enabled in continuous mode." << std::endl;
-        pBasler->BalanceWhiteAuto.SetValue(Pylon::BaslerCameraCameraParams_Params::BalanceWhiteAuto_Continuous);
+        pBasler->BalanceWhiteAuto.SetValue(Basler_UniversalCameraParams::BalanceWhiteAuto_Continuous);
 
 
         pBasler->AcquisitionFrameRateEnable.SetValue(true);
@@ -195,15 +197,15 @@ bool setAsMaster()
     {
         // Select Line 2 (output line)
         CHECK_AW(pBasler->LineSelector);
-        pBasler->LineSelector.SetValue(Pylon::BaslerCameraCameraParams_Params::LineSelector_Out1);
+        pBasler->LineSelector.SetValue(Basler_UniversalCameraParams::LineSelector_Out1);
 
         // Set it as output
         CHECK_AW(pBasler->LineMode);
-        pBasler->LineMode.SetValue(Pylon::BaslerCameraCameraParams_Params::LineMode_Output);
+        pBasler->LineMode.SetValue(Basler_UniversalCameraParams::LineMode_Output);
 
         // Set the source signal to User Output 1
         CHECK_AW(pBasler->LineSource);
-        pBasler->LineSource.SetValue(Pylon::BaslerCameraCameraParams_Params::LineSource_ExposureActive);
+        pBasler->LineSource.SetValue(Basler_UniversalCameraParams::LineSource_ExposureActive);
     }
     catch (const Pylon::GenericException &e)
     {
@@ -214,7 +216,7 @@ bool setAsMaster()
 
     // Setup continuous acquisition as trigger
     // In theory continuous acquisition is already set by default
-    // pBasler->AcquisitionMode.TrySetValue( Pylon::BaslerCameraCameraParams_Params::AcquisitionMode_Continuous );
+    // pBasler->AcquisitionMode.TrySetValue( Basler_UniversalCameraParams::AcquisitionMode_Continuous );
     std::cout << "[BaslerAdapter::setAsMaster] Configured internal trigger and signal output." << std::endl;
 
     return true;   
@@ -266,7 +268,7 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
         if (ptrGrabResult->GrabSucceeded())
         {
             // Access the image data.
-            const uint8_t *pImageBuffer = (uint8_t *) ptrGrabResult->GetBuffer();
+            // const uint8_t *pImageBuffer = (uint8_t *) ptrGrabResult->GetBuffer();
 
             formatConverter.Convert(pylonImage, ptrGrabResult);
             // needs to be cloned so to not keep pointing to local raw data that will be destroyed after function finishes
@@ -350,7 +352,7 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
 }
 
 /**
- * @brief Function that handle all camera de-initializacoin, port closing and Pylon clean finishing.
+ * @brief Function that handle all camera de-initialization, port closing and Pylon clean finishing.
  * @return true or false depending on image acquisition
  */
 bool closeCamera()

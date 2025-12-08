@@ -363,7 +363,7 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
 
 
 /**
- * @brief Function that handle all camera de-initializacoin, port closing and Pylon clean finishing.
+ * @brief Function that handle all camera de-initialization, port closing and Pylon clean finishing.
  * @return true or false depending on image acquisition
  */
 bool closeCamera()

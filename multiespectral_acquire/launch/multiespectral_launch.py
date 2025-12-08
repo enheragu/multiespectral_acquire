@@ -1,0 +1,63 @@
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.actions import SetEnvironmentVariable
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
+
+def generate_launch_description():
+    # Argumentos
+
+    dataset_output_path = DeclareLaunchArgument('dataset_output_path', 
+                                                default_value='/home/quique/umh/ros2_ws/images_eeha')
+    frame_rate = DeclareLaunchArgument('frame_rate', default_value='2')
+    
+    # Namespace Multiespectral
+    multiespectral_ns = GroupAction([
+        # SetEnvironmentVariable('RCUTILS_CONSOLE_OUTPUT_FORMAT', '[{time}] [{severity}]: {message}'),
+        # SetEnvironmentVariable('RCUTILS_LOGGING_BUFFERED_STREAM', '1'),
+        # SetEnvironmentVariable('RCUTILS_LOGGING_USE_STDOUT', '1'),
+
+        # FLIR LWIR (slave)
+        Node(
+            package='multiespectral_acquire',
+            executable='flir_slave',
+            name='lwir_camera',
+            namespace='Multiespectral',
+            output='screen',
+            parameters=[{
+                'dataset_output_path': LaunchConfiguration('dataset_output_path'),
+                'frame_rate': LaunchConfiguration('frame_rate'),
+                'image_topic': 'lwir_camera',
+                'camera_info_url': PathJoinSubstitution([
+                    FindPackageShare('multiespectral_acquire'), 
+                    'conf', 'lwir_params.yaml'])
+            }],
+            emulate_tty=True 
+        ),
+        
+        # Basler visible (master) - IP desde variable de entorno
+        Node(
+            package='multiespectral_acquire',
+            executable='basler_master',
+            name='visible_camera',
+            namespace='Multiespectral',
+            output='screen',
+            parameters=[{
+                'dataset_output_path': LaunchConfiguration('dataset_output_path'),
+                'camera_ip': '$(env MULTIESPECTRAL_VISIBLE_IP)',
+                'frame_rate': LaunchConfiguration('frame_rate'),
+                'image_topic': 'visible_camera',
+                'camera_info_url': PathJoinSubstitution([
+                    FindPackageShare('multiespectral_acquire'), 
+                    'conf', 'visible_params.yaml'])
+            }],
+            emulate_tty=True 
+        )
+    ])
+    
+    return LaunchDescription([
+        dataset_output_path,
+        frame_rate,
+        multiespectral_ns
+    ])

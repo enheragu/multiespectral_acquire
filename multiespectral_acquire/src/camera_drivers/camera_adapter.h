@@ -10,9 +10,12 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
 
-#include <sensor_msgs/Image.h>
-#include <cv_bridge/cv_bridge.h>
-#include <image_transport/image_transport.h>
+#include <sensor_msgs/msg/image.hpp>
+#include "cv_bridge/cv_bridge.hpp"
+#include "image_transport/image_transport.hpp"
+
+#include <camera_info_manager/camera_info_manager.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
 
 
 
@@ -52,7 +55,7 @@ struct ImageMetadata {
       systemTime("UNSET") {}
 };
 
-class MultiespectralAcquireT
+class MultiespectralAcquireT: public rclcpp::Node
 {
 protected:
     std::string img_path = "";
@@ -60,20 +63,22 @@ protected:
 
     std::string camera_ip;
     std::string topic_name;
+
+    std::string camera_info_cfg;
+    std::shared_ptr<camera_info_manager::CameraInfoManager> cinfo_;
     
-    ros::NodeHandle nh_;
-    image_transport::Publisher image_pub_;
+    image_transport::CameraPublisher image_pub_;
 public:
-    MultiespectralAcquireT(std::string img_path, std::string topic_name);
+    MultiespectralAcquireT(std::string name);
     ~MultiespectralAcquireT(void);
-    bool init(int frame_rate, std::string camera_ip);
+    bool init(int frame_rate);
     bool grabImage(cv::Mat& curr_image, uint64_t& timestamp, ImageMetadata& metadata);
     bool StoreImage(cv::Mat& curr_image, uint64_t& timestamp, ImageMetadata& metadata, bool store = true);
     bool grabStoreImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata, bool store = true);
     bool changeFrameRate(int frame_rate);
     
     // see function definition
-    void dummyCallback(const sensor_msgs::ImageConstPtr& msg);
+    void dummyCallback(const sensor_msgs::msg::Image::ConstSharedPtr& msg);
 };
 
 #endif //CAMERA_ADAPTER_H

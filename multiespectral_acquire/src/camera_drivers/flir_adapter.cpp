@@ -96,7 +96,7 @@ bool AutoConfigureFlirCamera(int interface_n = 1, int camera_index = 0)
     std::cout << "[FlirAdapter::AutoConfigure] Setting all GigE cameras discovered from interface " << interface_n << " to an IP configuration that will work with Spinnaker:" << std::endl;
 
     Spinnaker::InterfaceList interfaceList = pSystem->GetInterfaces();
-    unsigned int interfaceCount = interfaceList.GetSize();
+    // unsigned int interfaceCount = interfaceList.GetSize();
     { // otro ambito para estas variables
         Spinnaker::InterfacePtr pInterface = interfaceList.GetByIndex(interface_n);
         Spinnaker::GenApi::INodeMap& nodeMapInterface = pInterface->GetTLNodeMap();
@@ -446,7 +446,7 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
 }
 
 /**
- * @brief Function that handle all camera de-initializacoin, port closing and Spinnaker clean finishing.
+ * @brief Function that handle all camera de-initialization, port closing and Spinnaker clean finishing.
  * @return true or false depending on image acquisition
  */
 bool closeCamera()
