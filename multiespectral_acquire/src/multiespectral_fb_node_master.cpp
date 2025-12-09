@@ -42,6 +42,8 @@ public:
     
     MultiespectralAcquire(std::string name): MultiespectralAcquireT(name), action_name_(name)
     {
+        this->init(this->getFrameRate());
+        
         using namespace std::placeholders;
 
         auto handle_goal = [this](const rclcpp_action::GoalUUID & uuid,std::shared_ptr<const MultiespectralAcquisition::Goal> goal)
@@ -74,6 +76,7 @@ public:
             handle_accepted);       
 
         slave_camera_client_ = this->create_client<ImageRequest>("multiespectral_slave_service");
+
     }
 
     bool init(int frame_rate)
@@ -87,12 +90,14 @@ public:
         
         result = result && beginAcquisition();
         
-        if (!result) 
+        if(result) RCLCPP_INFO_STREAM(get_logger(),SUCCEED_F << "[MAMaster::init] Start image acquisition loop for camera "  << getName() << "." << RESET_F);
+        if(!result) 
         {
+            RCLCPP_FATAL_STREAM(get_logger(),"[MAMaster::init] Camera init image acquisition failed");
             RCLCPP_FATAL_STREAM(get_logger(),"[MAMaster::MAMaster] Camera init failed");
             throw std::runtime_error("[MAMaster::MAMaster] Camera init failed");
         }
-        RCLCPP_INFO_STREAM(get_logger(),"[MAMaster::MAMaster] Camera initialized successfully");
+        RCLCPP_INFO_STREAM(get_logger(), SUCCEED_F << "[MAMaster::MAMaster] Camera "<<getName()<<" ("<<getType()<<") initialized successfully" << RESET_F);
 
         return result;
     }
@@ -127,12 +132,17 @@ public:
             cv::Mat curr_image(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));  // Init given pattern to check
             createTestPattern(curr_image);
 
-            uint64_t timestamp;
             ImageMetadata metadata;
-            // RCLCPP_INFO("[MAMaster::executeCB] Grabbing image.");
-            result = this->grabStoreImage(curr_image, timestamp, metadata, goal->store);
+            RCLCPP_DEBUG(get_logger(), "[MAMaster::executeCB] Grabbing image.");
+            result = this->grabPublishImage(curr_image, metadata);
+            if(result && goal->store)
+            {
+                RCLCPP_DEBUG(get_logger(), "[MAMaster::executeCB] Storing image.");
+                result = this->storeImage(curr_image, metadata);
+            }
             if (result) 
             {
+                RCLCPP_DEBUG(get_logger(), "[MAMaster::executeCB] Update action feedback.");
                 action_feedback->images_acquired = action_feedback->images_acquired + 1;
                 
                 if (!curr_image.empty())
@@ -144,10 +154,11 @@ public:
             }
 
             // RCLCPP_INFO(get_logger(), "[MAMaster::executeCB] Prepare request for image with timestamp: %lu", timestamp);
-
+            RCLCPP_DEBUG(get_logger(), "[MAMaster::executeCB] Send slave request.");
             auto request = std::make_shared<ImageRequest::Request>();
-            request->timestamp = timestamp;
+            request->timestamp = metadata.getTimestamp();
             request->store = goal->store;
+            request->visible_pair = metadata.img_name;
             
             if (!slave_camera_client_->wait_for_service(std::chrono::seconds(2))) {
                 RCLCPP_ERROR_STREAM(get_logger(), "Slave camera service not available");
@@ -183,7 +194,6 @@ int main(int argc, char **argv) {
     rclcpp::NodeOptions options;
     std::cout << "[multiespectral_fb_node_master] Starting Multiespectral Acquire Master Node for "<<getType()<<" images." << std::endl;
     auto node = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire_Master_" + getType());
-    node->init(node->getFrameRate());
     rclcpp::spin(node);
     rclcpp::shutdown();
 }

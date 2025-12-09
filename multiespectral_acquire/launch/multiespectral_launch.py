@@ -10,7 +10,7 @@ def generate_launch_description():
 
     dataset_output_path = DeclareLaunchArgument('dataset_output_path', 
                                                 default_value='/home/quique/umh/ros2_ws/images_eeha')
-    frame_rate = DeclareLaunchArgument('frame_rate', default_value='2')
+    frame_rate = DeclareLaunchArgument('frame_rate', default_value='6')
     
     # Namespace Multiespectral
     multiespectral_ns = GroupAction([
@@ -29,7 +29,8 @@ def generate_launch_description():
                 'camera_info_url': ['file://', PathJoinSubstitution([
                     FindPackageShare('multiespectral_acquire'), 
                     'conf', 'lwir_params.yaml'])]
-            }]
+            }],
+            emulate_tty=True # Emulate colors and such, if not colors and formatting are lost when using launch
         ),
         
         # Basler visible (master) - IP desde variable de entorno
@@ -47,7 +48,8 @@ def generate_launch_description():
                 'camera_info_url': ['file://', PathJoinSubstitution([
                     FindPackageShare('multiespectral_acquire'), 
                     'conf', 'visible_params.yaml'])]
-            }]
+            }],
+            emulate_tty=True # Emulate colors and such, if not colors and formatting are lost when using launch
             # , arguments=['--ros-args', '--log-level', 'DEBUG']
         )
     ])

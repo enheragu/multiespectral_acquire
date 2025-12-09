@@ -1,4 +1,5 @@
 # Solicitud
+string visible_pair
 uint64 timestamp
 bool store
 ---

@@ -77,6 +77,7 @@ bool initCamera(int frame_rate, std::string camera_ip)
     try
     {
         // Before using any pylon methods, the pylon runtime must be initialized. 
+        std::cout << "[BaslerAdapter::initCamera] Initialize Pylon runtime." << std::endl;
         Pylon::PylonInitialize();
         //Basler with IP: '192.168.4.5'
         // This takes first abailable
@@ -139,8 +140,8 @@ bool initCamera(int frame_rate, std::string camera_ip)
         CHECK_ARW(pBasler->ChunkModeActive);
         pBasler->ChunkModeActive.SetValue(true);
 
-        pBasler->ChunkSelector.SetValue("Timestamp");
-        pBasler->ChunkEnable.SetValue(true);
+        // pBasler->ChunkSelector.SetValue("Timestamp");
+        // pBasler->ChunkEnable.SetValue(true);
 
         pBasler->ChunkSelector.SetValue("Framecounter");
         pBasler->ChunkEnable.SetValue(true);
@@ -170,7 +171,15 @@ bool initCamera(int frame_rate, std::string camera_ip)
 bool beginAcquisition()
 {
     CHECK_POINTER(pBasler);
-    pBasler->StartGrabbing(Pylon::GrabStrategy_LatestImageOnly);
+    if (!pBasler->IsGrabbing())
+    {
+        std::cout << "[BaslerAdapter::beginAcquisition] Begin acquisition." << std::endl;
+        pBasler->StartGrabbing(Pylon::GrabStrategy_LatestImageOnly);
+    }
+    else
+    {
+        std::cout << "[BaslerAdapter::beginAcquisition] Acquisition already started." << std::endl;
+    }
     return true;
 }
 
@@ -180,7 +189,15 @@ bool beginAcquisition()
 bool endAcquisition()
 {
     CHECK_POINTER(pBasler);
-    pBasler->StopGrabbing();
+    if (pBasler->IsGrabbing())
+    {
+        std::cout << "[BaslerAdapter::endAcquisition] End acquisition." << std::endl;
+        pBasler->StopGrabbing();
+    }
+    else
+    {
+        std::cout << "[BaslerAdapter::endAcquisition] Acquisition is not running." << std::endl;
+    }
     return true;
 }
 
@@ -243,22 +260,21 @@ bool setAsSlave()
  * @param image CV mat reference to be filled with image
  * @return true or false depending on image acquisition
  */
-bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
+bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
 {
-    
     CHECK_POINTER(pBasler);
     try
     {
         // This smart pointer will receive the grab result data.
         Pylon::CGrabResultPtr ptrGrabResult;
         cv::Mat openCvImage;
-
+        
         Pylon::CImageFormatConverter formatConverter;
         formatConverter.OutputPixelFormat = Pylon::PixelType_BGR8packed;
         Pylon::CPylonImage pylonImage;
 
         // Wait for an image and then retrieve it. A timeout of 1000 ms is used.
-        pBasler->RetrieveResult( 2000, ptrGrabResult, Pylon::TimeoutHandling_ThrowException);
+        pBasler->RetrieveResult( 1000, ptrGrabResult, Pylon::TimeoutHandling_ThrowException);
         
         // Image grabbed successfully?
         if (!ptrGrabResult)
@@ -270,11 +286,12 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
         {
             // Access the image data.
             // const uint8_t *pImageBuffer = (uint8_t *) ptrGrabResult->GetBuffer();
-
+            
+            metadata.initTimestamps();
             formatConverter.Convert(pylonImage, ptrGrabResult);
             // needs to be cloned so to not keep pointing to local raw data that will be destroyed after function finishes
             image = cv::Mat(ptrGrabResult->GetHeight(), ptrGrabResult->GetWidth(), CV_8UC3, (uint8_t *)pylonImage.GetBuffer()).clone();
-            timestamp = ptrGrabResult->GetTimeStamp();
+            metadata.camera_timestamp = ptrGrabResult->GetTimeStamp();
 
             /*****************************************
             **   Extract metadata from chunk data   **
@@ -292,13 +309,13 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
             GenApi::INodeMap& chunkDataMap = ptrGrabResult->GetChunkDataNodeMap();
 
             // Timestamp
-            GenApi::CIntegerPtr chunkTimestamp(chunkDataMap.GetNode("ChunkTimestamp"));
-            if (GenApi::IsReadable(chunkTimestamp))
-            {
-                int64_t ts = chunkTimestamp->GetValue();
-                // std::cout << "Timestamp: " << ts << std::endl;
-                metadata.timestamp = ts;
-            }
+            // GenApi::CIntegerPtr chunkTimestamp(chunkDataMap.GetNode("ChunkTimestamp"));
+            // if (GenApi::IsReadable(chunkTimestamp))
+            // {
+            //     int64_t ts = chunkTimestamp->GetValue();
+            //     // std::cout << "Timestamp: " << ts << std::endl;
+            //     metadata.camera_timestamp = ts;
+            // }
         
             // Framecounter
             GenApi::CIntegerPtr chunkFrameCounter(chunkDataMap.GetNode("ChunkFramecounter"));
@@ -335,7 +352,6 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
                 // std::cout << "[BaslerAdapter::acquireImage] Gain actual: " << gain << " dB" << std::endl;
                 metadata.gain = gain;
             }
-            metadata.systemTime = getTimeTag();
         }
         else
         {

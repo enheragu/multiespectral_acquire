@@ -21,7 +21,8 @@ private:
 
 public:
     MultiespectralAcquire(std::string name): MultiespectralAcquireT(name)
-    {        
+    {
+        this->init(this->getFrameRate());        
     }
 
     bool init(int frame_rate)
@@ -35,7 +36,9 @@ public:
 
         result = result && beginAcquisition();
         
-        RCLCPP_INFO_STREAM(get_logger(),"[MADriver::init] Start image acquisition loop for camera "  << getName() << ".");
+        if(result) RCLCPP_INFO_STREAM(get_logger(),SUCCEED_F << "[MADriver::init] Start image acquisition loop for camera "  << getName() << "." << RESET_F);
+        if(!result) RCLCPP_FATAL_STREAM(get_logger(),"[MADriver::init] Camera init image acquisition failed");
+
         timer_ = this->create_wall_timer(
             std::chrono::duration<double>(1.0/FLIR_FRAME_RATE),
             std::bind(&MultiespectralAcquire::acquisition_loop, this));
@@ -45,7 +48,7 @@ public:
             RCLCPP_FATAL_STREAM(get_logger(),"[MADriver::MADriver] Camera init failed");
             throw std::runtime_error("[MADriver::MADriver] Camera init failed");
         }
-        RCLCPP_INFO_STREAM(get_logger(),"[MADriver::MADriver] Camera initialized successfully");
+        RCLCPP_INFO_STREAM(get_logger(),SUCCEED_F << "[MADriver::MADriver] Camera "<<getName()<<" ("<<getType()<<") initialized successfully"<<RESET_F);
         return result;
     }
     
@@ -53,9 +56,8 @@ private:
     void acquisition_loop() {
         cv::Mat curr_image(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));  // Init given pattern to check
         createTestPattern(curr_image);
-        uint64_t timestamp;
         ImageMetadata metadata;
-        bool result = this->grabStoreImage(curr_image, timestamp, metadata, false);
+        bool result = this->grabPublishImage(curr_image, metadata);
         if (!result) 
         {
             RCLCPP_WARN_STREAM(get_logger(),"[MADriver::acquisition_loop] Could not grab image from camera " << getName() << ".");
@@ -70,7 +72,6 @@ int main(int argc, char **argv) {
     rclcpp::NodeOptions options;
     std::cout << "[multiespectral_fb_node_driver] Starting Multiespectral Acquire Driver Node for "<<getType()<<" images." << std::endl;
     auto node = std::make_shared<MultiespectralAcquire>("CameraAcquire_Driver_" + getType());
-    node->init(node->getFrameRate());
     rclcpp::spin(node);
     rclcpp::shutdown();
 }

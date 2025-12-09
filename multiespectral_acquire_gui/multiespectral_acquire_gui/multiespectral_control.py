@@ -89,7 +89,7 @@ def main(args=None):
     
     try:
         print("[MultiespectralAcquireGui] Start Flask app.")
-        socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
+        socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True, use_reloader=False)
     except KeyboardInterrupt:
         pass
     finally:

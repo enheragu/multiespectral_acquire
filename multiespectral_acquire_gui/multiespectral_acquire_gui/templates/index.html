@@ -10,11 +10,21 @@
             display: flex;
             flex-wrap: wrap;
             justify-content: space-between;
+            width: 100%;
+            margin: 20px 0;
         }
         .image-box {
             flex: 1;
-            margin: 10px;
-            max-width: 45%;
+            margin: 10px 5px;
+            max-width: none;
+            width: 50%;
+        }
+        .image-box img {
+            width: 100%;
+            height: auto;
+            object-fit: contain;
+            border: 1px solid #ddd;
+            border-radius: 5px;
         }
         .orientation-layout {
             display: none; /* Oculta por defecto */
@@ -33,7 +43,9 @@
                 flex-direction: column; /* Imágenes en una columna */
             }
             .image-box {
-                max-width: 90%; /* Imágenes ocupan todo el ancho */
+                max-width: 100%; /* Imágenes ocupan todo el ancho */
+                width: 100%;
+                margin: 10px 0;
             }
             .btn {
                 min-height: 100px;

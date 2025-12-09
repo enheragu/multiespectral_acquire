@@ -263,12 +263,12 @@ bool endAcquisition()
     CHECK_POINTER(pFlir);
     if (pFlir->IsStreaming())
     {
-        std::cout << "[FlirAdapter::beginAcquisition] End acquisition." << std::endl;
+        std::cout << "[FlirAdapter::endAcquisition] End acquisition." << std::endl;
         pFlir->EndAcquisition();
     }
     else
     {
-        std::cout << "[FlirAdapter::beginAcquisition] Acquisition is not running." << std::endl;
+        std::cout << "[FlirAdapter::endAcquisition] Acquisition is not running." << std::endl;
     }
     return true;
 }
@@ -356,7 +356,7 @@ bool setAsSlave()
  * @param image CV mat reference to be filled with image
  * @return true or false depending on image acquisition
  */
-bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
+bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
 {
     CHECK_POINTER(pFlir);
     bool result = true;
@@ -377,6 +377,8 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
         }
         else
         {
+            metadata.initTimestamps();
+
             Spinnaker::ImageProcessor processor;
             processor.SetColorProcessing(Spinnaker::SPINNAKER_COLOR_PROCESSING_ALGORITHM_HQ_LINEAR);
             Spinnaker::ImagePtr convertedImage = processor.Convert(pResultImage, Spinnaker::PixelFormat_Mono8);
@@ -387,13 +389,12 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
             void *image_data = convertedImage->GetData();
             unsigned int stride = convertedImage->GetStride();
             image = cv::Mat(rows, cols, (num_channels == 3) ? CV_8UC3 : CV_8UC1, image_data, stride);
-            timestamp = convertedImage->GetTimeStamp();
             
 
             /**************************
             **   Extract metadata    **
             ***************************/
-            metadata.timestamp = convertedImage->GetTimeStamp();
+            metadata.camera_timestamp = convertedImage->GetTimeStamp();
             metadata.frameCounter = pResultImage->GetFrameID();
             metadata.width = pResultImage->GetWidth();
             metadata.height = pResultImage->GetHeight();
@@ -421,7 +422,6 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
             if (Spinnaker::GenApi::IsReadable(gain))
                 metadata.gain = gain->GetValue();
 
-            metadata.systemTime = getTimeTag();
 
         }      
         pResultImage->Release();  

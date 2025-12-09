@@ -68,12 +68,12 @@ bool endAcquisition()
 {
     if (aquisition_status)
     {
-        std::cout << "[DummyAdapter::beginAcquisition] End acquisition." << std::endl;
+        std::cout << "[DummyAdapter::endAcquisition] End acquisition." << std::endl;
         aquisition_status = false;
     }
     else
     {
-        std::cout << "[DummyAdapter::beginAcquisition] Acquisition is not running." << std::endl;
+        std::cout << "[DummyAdapter::endAcquisition] Acquisition is not running." << std::endl;
     }
     return true;
 }
@@ -104,7 +104,7 @@ bool setAsSlave()
  * @param image CV mat reference to be filled with image
  * @return true or false depending on image acquisition
  */
-bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
+bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
 {
     std::cout << "[DummyAdapter::acquireImage]" << std::endl;
     
@@ -112,18 +112,14 @@ bool acquireImage(cv::Mat& image, uint64_t& timestamp, ImageMetadata& metadata)
     /****************************
     **   Set dummy metadata    **
     *****************************/
-    metadata.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    metadata.initTimestamps();
     metadata.frameCounter = frame_id++;
     metadata.width = 640;
     metadata.height = 480;
     metadata.pixelFormat = "CV_8UC1";
     metadata.exposureTime = 10000.0; // Exposure
-    metadata.systemTime = getTimeTag();
 
     image = cv::Mat::zeros(metadata.height, metadata.width, CV_8UC1);
-    timestamp = metadata.timestamp;
-
 
     return true;
 }

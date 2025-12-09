@@ -214,6 +214,7 @@ bool initCamera(int frame_rate, std::string camera_ip)
 bool beginAcquisition()
 {
     CHECK_POINTER(pBasler);
+    std::cout << "[BaslerAdapter::beginAcquisition] Starting acquisition." << std::endl;
     pBasler->StartGrabbing(Pylon::GrabStrategy_LatestImageOnly);
     return true;
 }

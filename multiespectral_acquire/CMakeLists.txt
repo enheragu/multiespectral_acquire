@@ -47,6 +47,11 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
+include_directories(
+  include
+  include/multiespectral_acquire
+)
+
 ## Executables 
 add_executable(dummy_master src/multiespectral_fb_node_master.cpp src/camera_drivers/dummy_adapter.cpp src/camera_drivers/camera_adapter.cpp )
 add_executable(dummy_slave src/multiespectral_fb_node_slave.cpp src/camera_drivers/dummy_adapter.cpp src/camera_drivers/camera_adapter.cpp )
@@ -83,6 +88,10 @@ target_link_libraries(basler_slave yaml-cpp ${OpenCV_LIBS} ${cpp_typesupport_tar
 
 
 ## Install targets, launch files and configuration
+
+install(DIRECTORY include/
+  DESTINATION include/)
+  
 install(TARGETS
     dummy_master
     dummy_slave

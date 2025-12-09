@@ -34,9 +34,9 @@ void createTestPattern(cv::Mat& image)
                   cv::Scalar(0, 255, 255), 8);  // Amarillo grueso
 }
 
-std::string getFolderTimetag()
+
+std::string getFolderTimetag(std::chrono::system_clock::time_point now)
 {
-    auto now = std::chrono::system_clock::now();
     std::time_t timeNow = std::chrono::system_clock::to_time_t(now);
     
     std::tm* tmNow = std::localtime(&timeNow);
@@ -47,8 +47,8 @@ std::string getFolderTimetag()
     return oss.str();
 }
 
-std::string getTimeTag() {
-    auto now = std::chrono::system_clock::now();
+std::string getTimeTag(std::chrono::system_clock::time_point now)
+{
     auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
     std::time_t timeNow = std::chrono::system_clock::to_time_t(now);
     
@@ -63,14 +63,18 @@ std::string getTimeTag() {
 void saveMetadataYaml(const ImageMetadata& meta, const std::string& filename)
 {
     YAML::Node node;
-    node["systemTime"] = meta.systemTime;
-    node["timestamp"] = meta.timestamp;
-    node["frameCounter"] = meta.frameCounter;
-    node["exposureTime_us"] = meta.exposureTime;
-    node["gain_dB"] = meta.gain;
-    node["width"] = meta.width;
-    node["height"] = meta.height;
-    node["pixelFormat"] = meta.pixelFormat;
+    node["imgName"] = meta.img_name;
+    node["imgPairName"] = meta.img_pair_name;
+    node["cameraTimestamp"] = meta.camera_timestamp;
+    node["rosTimestamp"] = meta.ros_timestamp;
+    node["systemTimestamp"] = meta.system_timestamp;
+    node["timetag"] = meta.timetag;
+    node["camera.frameCounter"] = meta.frameCounter;
+    node["camera.exposureTime"] = meta.exposureTime;
+    node["camera.gain"] = meta.gain;
+    node["camera.width"] = meta.width;
+    node["camera.height"] = meta.height;
+    node["camera.pixelFormat"] = meta.pixelFormat;
 
     std::ofstream fout(filename);
     fout << node;
@@ -142,37 +146,27 @@ MultiespectralAcquireT::~MultiespectralAcquireT(void)
     if(result) RCLCPP_INFO_STREAM(get_logger(),"[MAT::~MAT] Correctly finished " << getName() << " camera.");
 }
 
-bool MultiespectralAcquireT::grabImage(cv::Mat& curr_image, uint64_t& timestamp, ImageMetadata& metadata)
+bool MultiespectralAcquireT::grabImage(cv::Mat& curr_image, ImageMetadata& metadata)
 {
-    // RCLCPP_DEBUG_STREAM(get_logger(),"[MAT::grabImage] Init function.");
+    RCLCPP_DEBUG_STREAM(get_logger(),"[MAT::grabImage] Command to acquire image.");
     const std::scoped_lock<std::mutex> lock(camera_mutex);
-    bool result =  acquireImage(curr_image, timestamp, metadata);
-
-    // TBD use camera timestamp once synchronized
+    bool result =  acquireImage(curr_image, metadata);
     rclcpp::Time now = this->get_clock()->now();
-    timestamp = now.nanoseconds();
+    metadata.ros_timestamp = now.nanoseconds();
 
-    // RCLCPP_DEBUG_STREAM(get_logger(),"[MAT::grabImage] End function.");
+    RCLCPP_DEBUG_STREAM(get_logger(),"[MAT::grabImage] Aquired image.");
     if(!result) RCLCPP_ERROR_STREAM(get_logger(),"[MAT::grabImage] Could not acquire image from " << getName() << " camera.");
     return result;
 }
 
-bool MultiespectralAcquireT::processImage(cv::Mat& curr_image, uint64_t& timestamp, ImageMetadata& metadata, bool store)
+bool MultiespectralAcquireT::publishImage(cv::Mat& curr_image, ImageMetadata& metadata)
 {
-    RCLCPP_DEBUG_STREAM(get_logger(),"[MAT::processImage] Init function.");
-    const std::scoped_lock<std::mutex> lock(camera_mutex);
-    if (!curr_image.empty() && store) 
-    {
-        std::ostringstream filename;
-        filename << img_path << "/" << getTimeTag() << "_tcam_" << timestamp;
-        cv::imwrite(filename.str().c_str()+std::string(".png"), curr_image);
+    RCLCPP_DEBUG_STREAM(get_logger(),"[MAT::publishImage] Init function.");
 
-        saveMetadataYaml(metadata, filename.str().c_str()+std::string(".yaml"));
-    } 
-    // RCLCPP_DEBUG_STREAM(get_logger(),"[MAT::processImage] Finish storing image.");
     // Convert to a sensor_msgs::msg::Image message detecting encoding
     if (!curr_image.empty())
     {
+        const std::scoped_lock<std::mutex> lock(camera_mutex);
         std::string encoding;
         if (curr_image.type() == CV_8UC3) {
             encoding = "bgr8";
@@ -182,12 +176,12 @@ bool MultiespectralAcquireT::processImage(cv::Mat& curr_image, uint64_t& timesta
             std::cerr << "Unsupported image type: " << curr_image.type() << std::endl;
             return false;
         }
-        // RCLCPP_DEBUG_STREAM(get_logger(),"[MAT::processImage] Got image from "<<getName()<<", store with timestamp ("<<timestamp<<") and publish it.");
+        RCLCPP_DEBUG_STREAM(get_logger(),"[MAT::publishImage] Got image from "<<getName()<<", store with timestamp ("<<metadata.ros_timestamp<<") and publish it.");
         std_msgs::msg::Header header;
         // Convertir timestamp_ns a segundos y nanosegundos 
-        uint64_t sec = timestamp / 1000000000; 
-        uint64_t nsec = timestamp % 1000000000;
-        header.stamp = timestamp == 0 ? this->get_clock()->now() : rclcpp::Time(sec * 1e9 + nsec);
+        uint64_t sec = metadata.ros_timestamp / 1000000000; 
+        uint64_t nsec = metadata.ros_timestamp % 1000000000;
+        header.stamp = metadata.ros_timestamp == 0 ? this->get_clock()->now() : rclcpp::Time(sec * 1e9 + nsec);
         header.frame_id = getName() + "_frame";
         sensor_msgs::msg::Image::SharedPtr msg = cv_bridge::CvImage(header, encoding, curr_image).toImageMsg();
         
@@ -200,20 +194,46 @@ bool MultiespectralAcquireT::processImage(cv::Mat& curr_image, uint64_t& timesta
         image_pub_.publish(*msg.get(), cam_info);
     
         // ros::spinOnce(); // without explicit spinOnce, the LWIR image is as black (rgb is ok...). The info stream also works?¿
-        // RCLCPP_DEBUG_STREAM(get_logger(),"[MAT::processImage] Published image from "<<getName()<<" with encoding: " << encoding);
+        RCLCPP_DEBUG_STREAM(get_logger(),"[MAT::publishImage] Published image from "<<getName()<<" with encoding: " << encoding);
     }
 
-    if(curr_image.empty()) RCLCPP_ERROR_STREAM(get_logger(), "[MAT::processImage] Image is empty for " << getName() << " camera.");
+    if(curr_image.empty()) RCLCPP_ERROR_STREAM(get_logger(), "[MAT::publishImage] Image is empty for " << getName() << " camera.");
     return true;
 }
 
-bool MultiespectralAcquireT::grabStoreImage(cv::Mat& curr_image, uint64_t& timestamp, ImageMetadata& metadata, bool store)
+bool MultiespectralAcquireT::storeImage(cv::Mat& curr_image, ImageMetadata& metadata)
 {
-    // RCLCPP_DEBUG(get_logger(), "[MAT::grabStoreImage] Grabbing image.");
-    bool result =  grabImage(curr_image, timestamp, metadata);
-    // RCLCPP_DEBUG(get_logger(), "[MAT::grabStoreImage] Storing image.");
-    result = result && processImage(curr_image, timestamp, metadata, store);
-    // RCLCPP_DEBUG(get_logger(), "[MAT::grabStoreImage] Image processed.");
+    
+    if (!curr_image.empty()) 
+    {
+        const std::scoped_lock<std::mutex> lock(camera_mutex);
+        std::ostringstream oss;
+        oss << std::setfill('0') << std::setw(6) << this->stored_images;
+        metadata.img_name = getType() + "_" + oss.str();
+        this->stored_images++;
+
+        std::ostringstream filename;
+        filename << this->img_path << "/" << metadata.img_name;
+        cv::imwrite(filename.str().c_str()+std::string(".png"), curr_image);
+
+        saveMetadataYaml(metadata, filename.str().c_str()+std::string(".yaml"));
+        
+        RCLCPP_DEBUG(get_logger(), "[MAT::storeImage] Stored image.");
+    } 
+    return true;
+}
+
+bool MultiespectralAcquireT::grabPublishImage(cv::Mat& curr_image, ImageMetadata& metadata)
+{
+    RCLCPP_DEBUG(get_logger(), "[MAT::grabPublishImage] Grabbing image.");
+    bool result =  grabImage(curr_image, metadata);
+    if (!result) RCLCPP_ERROR_STREAM(get_logger(),"[MAT::grabPublishImage] Could not grab image from " << getName() << " camera.");
+    if (result)
+    {
+        result = publishImage(curr_image, metadata);
+    }
+    if (!result) RCLCPP_ERROR_STREAM(get_logger(),"[MAT::grabPublishImage] Could not publish image from " << getName() << " camera.");
+    RCLCPP_DEBUG(get_logger(), "[MAT::grabPublishImage] Image processed.");
     return result;
 }
 
