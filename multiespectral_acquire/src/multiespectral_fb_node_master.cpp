@@ -38,6 +38,9 @@ protected:
     std::string action_name_;
 
     rclcpp::Client<ImageRequest>::SharedPtr slave_camera_client_;
+
+    std::shared_ptr<MAGoalHandler> active_goal_;
+    std::mutex goal_mutex_;
 public:
     
     MultiespectralAcquire(std::string name): MultiespectralAcquireT(name), action_name_(name)
@@ -47,26 +50,31 @@ public:
         using namespace std::placeholders;
 
         auto handle_goal = [this](const rclcpp_action::GoalUUID & uuid,std::shared_ptr<const MultiespectralAcquisition::Goal> goal)
-            {
-                RCLCPP_INFO(this->get_logger(), "Received goal request with store flag as: %s", goal->store ? "true" : "false");
-                (void)uuid;
-                return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
-            };
+        {
+            RCLCPP_INFO(this->get_logger(), "Received goal request with store flag as: %s", goal->store ? "true" : "false");
+            (void)uuid;
+            return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+        };
 
         auto handle_cancel = [this](const std::shared_ptr<MAGoalHandler> goal_handle)
-            {
-                RCLCPP_INFO(this->get_logger(), "Received request to cancel goal");
-                (void)goal_handle;
-                return rclcpp_action::CancelResponse::ACCEPT;
-            };
+        {
+            RCLCPP_INFO(this->get_logger(), "Received request to cancel goal");
+            (void)goal_handle;
+            return rclcpp_action::CancelResponse::ACCEPT;
+        };
 
-        auto handle_accepted = [this](const std::shared_ptr<MAGoalHandler> goal_handle)
-            {
-                // this needs to return quickly to avoid blocking the executor,
-                // so we declare a lambda function to be called inside a new thread
-                auto execute_in_thread = [this, goal_handle](){return this->execute(goal_handle);};
-                std::thread{execute_in_thread}.detach();
-            };
+
+        auto handle_accepted = [this](const std::shared_ptr<MAGoalHandler> goal_handle) 
+        {
+            std::lock_guard<std::mutex> lock(goal_mutex_);
+            if (active_goal_ && (active_goal_->is_active() || active_goal_->is_canceling())) {
+                active_goal_->canceled(std::make_shared<MultiespectralAcquisition::Result>());
+                RCLCPP_INFO(this->get_logger(), "Previous goal canceled due to new goal arrival.");
+            }
+            active_goal_ = goal_handle;
+            auto execute_in_thread = [this, goal_handle]() { this->execute(goal_handle); };
+            std::thread{execute_in_thread}.detach();
+        };
 
         this->action_server_ = rclcpp_action::create_server<MultiespectralAcquisition>(
             this,
@@ -109,7 +117,7 @@ public:
         auto action_result = std::make_shared<MultiespectralAcquisition::Result>();
 
         action_feedback->images_acquired = 0;
-        action_feedback->storage_path = "";
+        action_feedback->storage_path = "none";
         RCLCPP_INFO_STREAM(get_logger(),"[MAMaster::execute] Start image acquisition loop. " << std::string(goal->store?"S":"Not s") << "toring images. Frame rate is "<<std::to_string(this->frame_rate) << "Hz for camera " << getName() << ".");
 
         if (goal->store)
@@ -123,9 +131,14 @@ public:
         rclcpp::Rate loop_rate(this->frame_rate);
         while (rclcpp::ok())
         {
-            if (goal_handle->is_canceling()) {
+            if (goal_handle->is_canceling()) 
+            {
                 goal_handle->canceled(action_result);
-                RCLCPP_INFO(this->get_logger(), "Goal canceled");
+                RCLCPP_INFO(this->get_logger(), "Goal canceled.");
+                return;
+            }
+            if (!goal_handle->is_active()) {
+                RCLCPP_INFO(this->get_logger(), "Goal is not active anymore, stopping execution.");
                 return;
             }
 
@@ -142,12 +155,10 @@ public:
             }
             if (result) 
             {
-                RCLCPP_DEBUG(get_logger(), "[MAMaster::executeCB] Update action feedback.");
-                action_feedback->images_acquired = action_feedback->images_acquired + 1;
-                
+                RCLCPP_DEBUG(get_logger(), "[MAMaster::executeCB] Update action feedback.");                
                 if (!curr_image.empty())
                 {
-                    action_feedback->images_acquired = action_feedback->images_acquired + 1;
+                    action_feedback->images_acquired++;
                     action_result->images_acquired = action_feedback->images_acquired;
                 }
                 goal_handle->publish_feedback(action_feedback);
@@ -183,6 +194,8 @@ public:
 
             loop_rate.sleep();
         }
+        goal_handle->succeed(action_result);
+
     }
 
 }; // End class MultiespectralAcquire

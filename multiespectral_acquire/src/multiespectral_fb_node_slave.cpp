@@ -91,11 +91,21 @@ public:
         }
         else
         {
-            auto closest_it = std::min_element(image_buffer.begin(), image_buffer.end(),
-                [timestamp](const FrameData& a, const FrameData& b) {
-                    return std::abs(static_cast<int64_t>(a.timestamp - timestamp)) <
-                        std::abs(static_cast<int64_t>(b.timestamp - timestamp));
-                });
+            // Gets closest (higher or lower)
+            // auto closest_it = std::min_element(image_buffer.begin(), image_buffer.end(),
+            //     [timestamp](const FrameData& a, const FrameData& b) {
+            //         return std::abs(static_cast<int64_t>(a.timestamp - timestamp)) <
+            //             std::abs(static_cast<int64_t>(b.timestamp - timestamp));
+            //     });
+            
+            // Gets closest (higher or equal)
+            auto closest_it = std::lower_bound(image_buffer.begin(), image_buffer.end(), timestamp,
+                [](const FrameData& a, int64_t ts) { return a.timestamp < ts; });
+            
+            if (closest_it == image_buffer.end())
+            {
+                RCLCPP_ERROR_STREAM(get_logger(),"[MASlave::service_cb] No image found in buffer with timestamp constraint provided.");
+            }
             
             closest_it->metadata.img_pair_name = request->visible_pair;
             ret = publishImage(closest_it->image, closest_it->metadata);

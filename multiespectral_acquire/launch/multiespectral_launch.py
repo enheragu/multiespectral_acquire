@@ -10,7 +10,7 @@ def generate_launch_description():
 
     dataset_output_path = DeclareLaunchArgument('dataset_output_path', 
                                                 default_value='/home/quique/umh/ros2_ws/images_eeha')
-    frame_rate = DeclareLaunchArgument('frame_rate', default_value='6')
+    frame_rate = DeclareLaunchArgument('frame_rate', default_value='1')
     
     # Namespace Multiespectral
     multiespectral_ns = GroupAction([

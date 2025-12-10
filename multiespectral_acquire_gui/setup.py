@@ -13,9 +13,13 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), 
-         glob('launch/*launch.py')),
+        glob('launch/*launch.py')),
+        # FIX: Paths absolutos desde cwd del setup.py
         (os.path.join('share', package_name, 'templates'), 
-         glob('templates/*.html')),
+        glob('multiespectral_acquire_gui/templates/*.html')),
+        (os.path.join('share', package_name, 'static'), 
+            [f for f in glob('multiespectral_acquire_gui/static/**', recursive=True) 
+            if os.path.isfile(f)]),
     ],
     install_requires=[
         'setuptools', 

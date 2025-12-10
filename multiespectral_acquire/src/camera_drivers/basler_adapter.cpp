@@ -123,9 +123,9 @@ bool initCamera(int frame_rate, std::string camera_ip)
         std::cout << "[BaslerAdapter::initCamera] Auto Balance White enabled in continuous mode." << std::endl;
         pBasler->BalanceWhiteAuto.SetValue(Basler_UniversalCameraParams::BalanceWhiteAuto_Continuous);
 
-
-        pBasler->AcquisitionFrameRateEnable.SetValue(true);
-        pBasler->AcquisitionFrameRateAbs.SetValue(frame_rate);
+        std::cout << "[BaslerAdapter::initCamera] Frame Rate should be handled with loop that calls trigger as no continuous capture is enabled." << std::endl;
+        // pBasler->AcquisitionFrameRateEnable.SetValue(true);
+        // pBasler->AcquisitionFrameRateAbs.SetValue(frame_rate);
 
         ////////////////////////////////////
         //  Metadata extraction enabling  //
@@ -210,6 +210,18 @@ bool setAsMaster()
     std::cout << "No master configuration for now :)" << std::endl;
     return true;
 
+    // Setup continuous acquisition as trigger
+    // In theory continuous acquisition is already set by default
+    // pBasler->AcquisitionMode.TrySetValue( Basler_UniversalCameraParams::AcquisitionMode_Continuous );
+
+    // use software trigger to controll image acquisition
+    pBasler->AcquisitionMode.SetValue(Basler_UniversalCameraParams::AcquisitionMode_SingleFrame);
+
+    pBasler->TriggerSelector.SetValue("FrameStart");
+    pBasler->TriggerMode.SetValue("On");
+    pBasler->TriggerSource.SetValue("Software");
+
+
     CHECK_POINTER(pBasler);
     try
     {
@@ -232,9 +244,6 @@ bool setAsMaster()
         return false;
     }
 
-    // Setup continuous acquisition as trigger
-    // In theory continuous acquisition is already set by default
-    // pBasler->AcquisitionMode.TrySetValue( Basler_UniversalCameraParams::AcquisitionMode_Continuous );
     std::cout << "[BaslerAdapter::setAsMaster] Configured internal trigger and signal output." << std::endl;
 
     return true;   
@@ -274,6 +283,8 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
         Pylon::CPylonImage pylonImage;
 
         // Wait for an image and then retrieve it. A timeout of 1000 ms is used.
+        metadata.initTimestamps(); //Stores timetag when requested to avoid communication delay difference between cameras
+        pBasler->ExecuteSoftwareTrigger();
         pBasler->RetrieveResult( 1000, ptrGrabResult, Pylon::TimeoutHandling_ThrowException);
         
         // Image grabbed successfully?
@@ -286,8 +297,6 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
         {
             // Access the image data.
             // const uint8_t *pImageBuffer = (uint8_t *) ptrGrabResult->GetBuffer();
-            
-            metadata.initTimestamps();
             formatConverter.Convert(pylonImage, ptrGrabResult);
             // needs to be cloned so to not keep pointing to local raw data that will be destroyed after function finishes
             image = cv::Mat(ptrGrabResult->GetHeight(), ptrGrabResult->GetWidth(), CV_8UC3, (uint8_t *)pylonImage.GetBuffer()).clone();

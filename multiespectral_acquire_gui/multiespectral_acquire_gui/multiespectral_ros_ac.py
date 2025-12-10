@@ -23,8 +23,8 @@ frame_rate_lwir = FreqCounter()
 frame_rate_rgb = FreqCounter()
 lwir_img_path = ""
 rgb_img_path = ""
-lwir_img_storepath = ""
-rgb_img_storepath = ""
+storage_path = "not-updated-yet"
+images_acquired = 0
 store_in_drive = False
 camera_handler = None
 
@@ -37,92 +37,107 @@ image_size = {'lwir': (320, 240), 'rgb': (320, 240)}
 bridge = CvBridge()
 
 
-# Which actions will be used
-ac_subs_list = [basler_ac_name]  # flir_ac_name,  # FLIR working as slave already :)
-
 class RosMultiespectralAcquire(Node):
     def __init__(self, socketio):
-        if not rclpy.ok():
-            rclpy.init()
-
         super().__init__('multiespectral_flask_gui')
-        self.update_socketio_thread = None
-
-        self.running = False
         self.socketio = socketio
-        
-        self.client = []
-        for ac_name in ac_subs_list:
 
-            self.client.append(ActionClient(self, MultiespectralAcquisition, ac_name))
-            self.get_logger().info(f'Wait for "{ac_name}" server')
-            self.client[-1].wait_for_server()
+        self.client = ActionClient(self, MultiespectralAcquisition, basler_ac_name)
+        self.get_logger().info(f'Wait for "{basler_ac_name}" server')
+        self.client.wait_for_server()
 
-        # Suscribirse a los topics de imagen
-        self.image_sub1 = self.create_subscription(CompressedImage, flir_topic_name, self.lwir_image_cb, 10)
-        self.image_sub2 = self.create_subscription(CompressedImage, basler_topic_name, self.rgb_image_cb, 10)
-        
-        try:
-            self.update_socketio_thread = threading.Thread(target=self.updateSocketio)
-            self.update_socketio_thread.start()
-            self.socketio.on('image_size', self.update_image_size)
-        except Exception as e:
-            self.get_logger().error(f"Error initializing socket: {e}")
-            raise e
+        # Solo un goal activo (si quieres varios, usa lista)
+        self.goal_handle = None
 
-         
-    def __del__(self):
-        self.shutdown()
-        rclpy.shutdown()
-    
-    def shutdown(self):        
-        self.get_logger().info("[MultiespectralAcquireGui] Destructor")
-        if self.update_socketio_thread:
-            self.update_socketio_thread.join(timeout=2.0)
-        
-    def cancelGoal(self):
-        for client in self.client:
-            client.cancel_goal()
+        # Suscripciones
+        self.image_sub1 = self.create_subscription(
+            CompressedImage, flir_topic_name, self.lwir_image_cb, 10
+        )
+        self.image_sub2 = self.create_subscription(
+            CompressedImage, basler_topic_name, self.rgb_image_cb, 10
+        )
+
+        # Hilo de SocketIO
+        self._running = True
+        self.update_socketio_thread = threading.Thread(target=self.updateSocketio, daemon=True)
+        self.update_socketio_thread.start()
+        self.socketio.on('image_size', self.update_image_size)
+
+        self.get_logger().info("[MultiespectralAcquireGui] Node initialized.")
 
     def stop(self):
-        self.get_logger().info("Stopping image acquisition")
-        self.cancelGoal()
-        frame_rate_lwir.stop()
-        frame_rate_rgb.stop()
-        self.get_logger().info("Finished image acquisition")
+        self.get_logger().info("[stop] Destructor.")
+        self._running = False
+        if self.update_socketio_thread:
+            self.update_socketio_thread.join(timeout=2.0)
 
-    def sendGoal(self, store):
-        frame_rate_lwir.start()
-        frame_rate_rgb.start()
+    def sendGoal(self, store: bool):
+        # Si hay un goal activo, cancélalo primero
+        if self.goal_handle is not None:
+            self.get_logger().info('[sendGoal] Canceling previous goal.')
+            cancel_future = self.goal_handle.cancel_goal_async()
+            cancel_future.add_done_callback(self._cancel_previous_done)
 
         goal = MultiespectralAcquisition.Goal()
         goal.store = store
 
-        self.get_logger().info(f'Send goal with store flag as {store}.')
-        for client in self.client:
-            future = client.send_goal_async(goal, feedback_callback=self.feedback_cb)
-            future.add_done_callback(self.goal_response_callback)
+        frame_rate_lwir.start()
+        frame_rate_rgb.start()
+
+        future = self.client.send_goal_async(goal, feedback_callback=self.feedback_cb)
+        future.add_done_callback(self.goal_response_callback)
+        return True
+
+    def _cancel_previous_done(self, future):
+        resp = future.result()
+        if len(resp.goals_canceling) > 0:
+            self.get_logger().info('[_cancel_previous_done] Previous goal cancelled.')
+        else:
+            self.get_logger().warn('[_cancel_previous_done] Previous goal was not cancelled.')
+
 
     def goal_response_callback(self, future):
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self.get_logger().warn('Goal rejected')
+            self.get_logger().warn('[goal_response_callback] Goal REJECTED by server!')
             return
-        self.get_logger().info('Goal accepted')
+
+        self.get_logger().info('[goal_response_callback] Goal ACCEPTED.')
+        self.goal_handle = goal_handle
+
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self.result_callback)
 
     def result_callback(self, future):
         result = future.result().result
-        self.get_logger().info(f'Finished goal: {result}')
+        self.get_logger().info(f'[result_callback] Goal FINISHED: {result}.')
+        self.goal_handle = None
+        frame_rate_lwir.stop()
+        frame_rate_rgb.stop()
 
-    def feedback_cb(self, goal_handle, feedback):
-        global lwir_img_storepath, rgb_img_storepath
-        # self.get_logger().info(f'Feedback: Images Acquired = {feedback.images_acquired}, Storage Path = {feedback.storage_path}')
-        if 'lwir' in feedback.feedback.storage_path:
-            lwir_img_storepath = feedback.feedback.storage_path
+    def feedback_cb(self, feedback_msg):
+        feedback = feedback_msg.feedback
+        
+        global storage_path, images_acquired
+        storage_path = feedback.storage_path
+        images_acquired = feedback.images_acquired
+
+    def cancelGoal(self):
+        if self.goal_handle is None:
+            self.get_logger().warn('[cancelGoal] No active goal to cancel.')
+            return
+
+        self.get_logger().info('[cancelGoal] Canceling goal.')
+        cancel_future = self.goal_handle.cancel_goal_async()
+        cancel_future.add_done_callback(self._cancel_response_callback)
+
+    def _cancel_response_callback(self, future):
+        response = future.result()
+        if len(response.goals_canceling) > 0:
+            self.get_logger().info('[_cancel_response_callback] Goal cancelled successfully.')
         else:
-            rgb_img_storepath = feedback.feedback.storage_path
+            self.get_logger().warn('[_cancel_response_callback] Failed to cancel goal.')
+
 
     def update_image_size(self, size_data):
         global image_size
@@ -144,7 +159,7 @@ class RosMultiespectralAcquire(Node):
             lwir_img_path = base64.b64encode(lwir_buffer).decode('utf-8')
             frame_rate_lwir.tick()
         else:
-            self.get_logger().warn("Failed to convert LWIR image.")
+            self.get_logger().warn("[lwir_image_cb] Failed to convert LWIR image.")
 
     def rgb_image_cb(self, msg):
         global rgb_img_path, total_images_received_rgb
@@ -156,20 +171,20 @@ class RosMultiespectralAcquire(Node):
             rgb_img_path = base64.b64encode(rgb_buffer).decode('utf-8')
             frame_rate_rgb.tick()
         else:
-            self.get_logger().warn("Failed to convert RGB image.")
+            self.get_logger().warn("[rgb_image_cb] Failed to convert RGB image.")
 
     def updateSocketio(self):
-        while True:
+        while self._running and rclpy.ok():
             self.socketio.emit('update_data', {
-                    'total_images_received_lwir': frame_rate_lwir.cuontItems(),
-                    'total_images_received_rgb': frame_rate_rgb.cuontItems(),
-                    'lwir_img_path': lwir_img_path,
-                    'rgb_img_path': rgb_img_path,
-                    'lwir_img_storepath': lwir_img_storepath,
-                    'rgb_img_storepath': rgb_img_storepath,
-                    'frame_rate_lwir': str(frame_rate_lwir),
-                    'frame_rate_rgb': str(frame_rate_rgb)
-                })
+                'total_images_received_lwir': frame_rate_lwir.countItems(),
+                'total_images_received_rgb': frame_rate_rgb.countItems(),
+                'lwir_img_path': lwir_img_path,
+                'rgb_img_path': rgb_img_path,
+                'storage_path': storage_path,
+                # 'images_acquired': images_acquired,
+                'frame_rate_lwir': str(frame_rate_lwir),
+                'frame_rate_rgb': str(frame_rate_rgb),
+            })
             time.sleep(1)
         
     def convert_image(self, ros_image):
@@ -181,7 +196,7 @@ class RosMultiespectralAcquire(Node):
                 elif ros_image.encoding == "bgr8":
                     cv_image = bridge.imgmsg_to_cv2(ros_image, "bgr8")
                 else:
-                    self.get_logger().warn(f"Unexpected image encoding: {ros_image.encoding}. Defaulting to 'bgr8'.")
+                    self.get_logger().warn(f"[convert_image] Unexpected image encoding: {ros_image.encoding}. Defaulting to 'bgr8'.")
                     cv_image = bridge.imgmsg_to_cv2(ros_image, "bgr8")
                 return cv_image
             elif isinstance(ros_image, CompressedImage):
@@ -193,8 +208,8 @@ class RosMultiespectralAcquire(Node):
                     cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                 return cv_image
             else:
-                self.get_logger().warn("Received empty image message.")
+                self.get_logger().warn("[convert_image] Received empty image message.")
                 return None
         except CvBridgeError as e:
-            self.get_logger().err(f'CvBridge Error: {e}')
+            self.get_logger().error(f'[convert_image] CvBridge Error: {e}')
             return None

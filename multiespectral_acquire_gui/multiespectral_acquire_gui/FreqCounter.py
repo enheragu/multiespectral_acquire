@@ -21,7 +21,7 @@ class FreqCounter():
         freq = float(self.items_counter)/float(self.getTimeSec())
         return freq
     
-    def cuontItems(self):
+    def countItems(self):
         return self.items_counter
     
     def start(self):

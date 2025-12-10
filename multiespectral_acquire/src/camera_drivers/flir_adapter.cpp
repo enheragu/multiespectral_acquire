@@ -364,6 +364,7 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
     Spinnaker::ImagePtr pResultImage = nullptr;
     try
     {
+        metadata.initTimestamps(); //Stores timetag when requested to avoid communication delay difference between cameras
         pResultImage = pFlir->GetNextImage(2000);
         if (!pResultImage)
         {
@@ -377,8 +378,6 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
         }
         else
         {
-            metadata.initTimestamps();
-
             Spinnaker::ImageProcessor processor;
             processor.SetColorProcessing(Spinnaker::SPINNAKER_COLOR_PROCESSING_ALGORITHM_HQ_LINEAR);
             Spinnaker::ImagePtr convertedImage = processor.Convert(pResultImage, Spinnaker::PixelFormat_Mono8);

@@ -83,10 +83,10 @@
                         <label for="total_images_received_lwir_landscape">Num LWIR img:</label>
                         <input type="text" class="form-control" id="total_images_received_lwir_landscape" name="total_images_received_lwir" readonly>
                     </div>
-                    <div class="col">
+                    <!-- <div class="col">
                         <label for="lwir_img_storepath_landscape">LWIR img path:</label>
                         <input type="text" class="form-control" id="lwir_img_storepath_landscape" name="lwir_img_storepath" readonly>
-                    </div>
+                    </div> -->
                 </div>
                 <div class="form-row">
                     <div class="col">
@@ -97,13 +97,18 @@
                         <label for="total_images_received_rgb_landscape">Num RGB img:</label>
                         <input type="text" class="form-control" id="total_images_received_rgb_landscape" name="total_images_received_rgb" readonly>
                     </div>
-                    <div class="col">
+                    <!-- <div class="col">
                         <label for="rgb_img_storepath_landscape">RGB img path:</label>
                         <input type="text" class="form-control" id="rgb_img_storepath_landscape" name="rgb_img_storepath" readonly>
+                    </div> -->
+                </div>
+                <div class="form-row mt-3">
+                    <div class="col">
+                        <label for="store_path_landscape">Image store path:</label>
+                        <input type="text" class="form-control" id="store_path_landscape" name="store_path" readonly>
                     </div>
                 </div>
             </div>
-
             <!-- Layout para portrait -->
             <div id="layout-portrait" class="orientation-layout">
                 <div class="form-row">
@@ -127,13 +132,17 @@
                     </div>
                 </div>
                 <div class="form-row">
-                    <div class="col">
+                    <!-- <div class="col">
                         <label for="lwir_img_storepath_portrait">LWIR img path:</label>
                         <input type="text" class="form-control" id="lwir_img_storepath_portrait" name="lwir_img_storepath" readonly>
-                    </div>
-                    <div class="col">
+                    </div> -->
+                    <!-- <div class="col">
                         <label for="rgb_img_storepath_portrait">RGB img path:</label>
                         <input type="text" class="form-control" id="rgb_img_storepath_portrait" name="rgb_img_storepath" readonly>
+                    </div> -->
+                    <div class="col">
+                        <label for="store_path_portrait">Image store path:</label>
+                        <input type="text" class="form-control" id="store_path_portrait" name="store_path" readonly>
                     </div>
                 </div>
             </div>
@@ -191,14 +200,14 @@
                 $('#frame_rate_rgb_landscape').val(data.frame_rate_rgb);
                 $('#total_images_received_rgb_landscape').val(data.total_images_received_rgb);
                 $('#rgb_img_storepath_landscape').val(data.rgb_img_storepath);
+                $('#store_path_landscapescape').val(data.storage_path);
 
                 // Actualizar datos de layout-portrait
                 $('#frame_rate_lwir_portrait').val(data.frame_rate_lwir);
                 $('#frame_rate_rgb_portrait').val(data.frame_rate_rgb);
                 $('#total_images_received_lwir_portrait').val(data.total_images_received_lwir);
                 $('#total_images_received_rgb_portrait').val(data.total_images_received_rgb);
-                $('#lwir_img_storepath_portrait').val(data.lwir_img_storepath);
-                $('#rgb_img_storepath_portrait').val(data.rgb_img_storepath);
+                $('#store_path_portrait').val(data.storage_path);
                 
                 $('#lwir_image').attr('src', 'data:image/jpeg;base64,' + data.lwir_img_path);
                 $('#rgb_image').attr('src', 'data:image/jpeg;base64,' + data.rgb_img_path);

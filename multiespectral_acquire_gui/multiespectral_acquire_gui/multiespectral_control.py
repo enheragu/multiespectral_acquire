@@ -14,7 +14,8 @@ try:
     from multiespectral_acquire_gui.multiespectral_ros_ac import RosMultiespectralAcquire as MultiespectralAcquire
     using_ros = True
     print(f"[MultiespectralAcquireGui] Using ROS Multiespectral Acquire.")
-except ImportError: 
+except ImportError as e: 
+    print(f"[MultiespectralAcquireGui] ROS2 loading problem: {e}")
     from multiespectral_acquire_gui.multiespectral_dummy_ac import DummyMultiespectralAcquire as MultiespectralAcquire
     using_ros = False
     print(f"[MultiespectralAcquireGui] No ROS detected. Using Dummy Multiespectral Acquire.")
@@ -41,23 +42,19 @@ def home():
 @app.route('/start', methods=['POST'])
 def start_camera():
     global camera_handler, store_in_drive
+    if camera_handler is None:
+        return jsonify({"status": "not_initialized"})
+    
     store_in_drive = 'store_in_drive' in request.form
-    if not camera_handler:
-        camera_handler = MultiespectralAcquire(socketio)
-    init_success = camera_handler.sendGoal(store_in_drive)
-    if init_success:
-        print(f"[MultiespectralAcquireGui] Requested goal with {store_in_drive = }.")
-        threading.Thread(target=camera_handler.execute).start()
-        return jsonify({"status": "started"})
-    else:
-        return jsonify({"status": "failed to start"}), 500
+    camera_handler.sendGoal(store_in_drive)
+    return jsonify({"status": "started"})
+
 
 @app.route('/stop', methods=['POST'])
 def stop_camera():
     global camera_handler
     if camera_handler:
-        camera_handler.stop()
-        camera_handler = None
+        camera_handler.cancelGoal()
     return jsonify({"status": "stopped"})
 
 @app.route('/manifest')
@@ -66,38 +63,48 @@ def manifest():
     res.headers["Content-Type"] = "text/cache-manifest"
     return res
 
+
 def sigint_handler(sig, frame):
-    print("[MultiespectralAcquireGui] SIGINT received, closing application.")
-    global camera_handler, socketio
-    if camera_handler:
+    global camera_handler
+    print("[MultiespectralAcquireGui] SIGINT received.")
+    if using_ros and camera_handler:
         camera_handler.stop()
-    
+        camera_handler.destroy_node()
+        rclpy.shutdown()
     socketio.stop()
     exit(0)
+
+
+def ros2_thread():
+    rclpy.init()
+    camera_handler = MultiespectralAcquire(socketio)
+    
+    try:
+        rclpy.spin(camera_handler)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        camera_handler.shutdown()
+        camera_handler.destroy_node()
+        rclpy.shutdown()
 
 # ROS expects a main function so here it is...
 def main(args=None):
     signal.signal(signal.SIGINT, sigint_handler)
-    print("[MultiespectralAcquireGui] Start camera_handler.")
-    camera_handler = MultiespectralAcquire(socketio)
-    if using_ros:
-        executor = MultiThreadedExecutor(num_threads=4)
-        executor.add_node(camera_handler)
-
-        ros_thread = threading.Thread(target=executor.spin, daemon=True)
-        ros_thread.start()
     
-    try:
-        print("[MultiespectralAcquireGui] Start Flask app.")
-        socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True, use_reloader=False)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        camera_handler.stop()
-        if using_ros:
-            executor.shutdown()
-            camera_handler.destroy_node()
-            rclpy.shutdown()
+    global camera_handler
+    
+    if using_ros:
+        rclpy.init()
+        camera_handler = MultiespectralAcquire(socketio)
+        
+        ros_thread = threading.Thread(target=lambda: rclpy.spin(camera_handler), daemon=True)
+        ros_thread.start()
+    else:
+        camera_handler = MultiespectralAcquire(socketio)
+    
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
+
 
 if __name__ == '__main__':
     main()
