@@ -126,6 +126,10 @@ bool initCamera(int frame_rate, std::string camera_ip)
         std::cout << "[BaslerAdapter::initCamera] Frame Rate should be handled with loop that calls trigger as no continuous capture is enabled." << std::endl;
         // pBasler->AcquisitionFrameRateEnable.SetValue(true);
         // pBasler->AcquisitionFrameRateAbs.SetValue(frame_rate);
+        
+        // No PTP in this camera :)
+        bool b = pBasler->GevSupportedIEEE1588.GetValue();
+        std::cout << "[BaslerAdapter::initCamera] Is PTP supported by " << getName() << "? " << (b ? "Yes" : "No") << std::endl;
 
         ////////////////////////////////////
         //  Metadata extraction enabling  //
@@ -151,9 +155,6 @@ bool initCamera(int frame_rate, std::string camera_ip)
 
         pBasler->ChunkSelector.SetValue("GainAll");
         pBasler->ChunkEnable.SetValue(true);
-
-        // Enable PTP and set camera as slave
-        // pBasler->GevIEEE1588.SetValue(true);
 
         return true;
     }
