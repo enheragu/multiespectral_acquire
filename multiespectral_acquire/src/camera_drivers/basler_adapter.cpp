@@ -46,6 +46,8 @@
 // Reference to basler camera to be handled
 std::unique_ptr<Pylon::CBaslerUniversalInstantCamera> pBasler;
 std::string camera_name = "Default:acA1600-60gc";
+int64_t tick_frequency = 1000000; // ticks per second default 1 MHz
+
 /**
  * @brief Get name of the camera for logging purposes
  */
@@ -77,7 +79,7 @@ bool initCamera(int frame_rate, std::string camera_ip)
     try
     {
         // Before using any pylon methods, the pylon runtime must be initialized. 
-        std::cout << "[BaslerAdapter::initCamera] Initialize Pylon runtime." << std::endl;
+        std::cout << "[BaslerAdapter::initCamera] Initialize Pylon runtime for basler camera (frame_rate " << frame_rate << "; camera_ip " << camera_ip << ")." << std::endl;
         Pylon::PylonInitialize();
         //Basler with IP: '192.168.4.5'
         // This takes first abailable
@@ -130,6 +132,11 @@ bool initCamera(int frame_rate, std::string camera_ip)
         // No PTP in this camera :)
         bool b = pBasler->GevSupportedIEEE1588.GetValue();
         std::cout << "[BaslerAdapter::initCamera] Is PTP supported by " << getName() << "? " << (b ? "Yes" : "No") << std::endl;
+
+        GenApi::CIntegerPtr tsFreqNode(pBasler->GetNodeMap().GetNode("GevTimestampTickFrequency"));
+        CHECK_AR(tsFreqNode)
+        tick_frequency = tsFreqNode->GetValue();
+        std::cout << "[BaslerAdapter::initCamera] Timestamp Tick Frequency: " << tick_frequency << " ticks/s" << std::endl;
 
         ////////////////////////////////////
         //  Metadata extraction enabling  //
@@ -301,7 +308,8 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
             formatConverter.Convert(pylonImage, ptrGrabResult);
             // needs to be cloned so to not keep pointing to local raw data that will be destroyed after function finishes
             image = cv::Mat(ptrGrabResult->GetHeight(), ptrGrabResult->GetWidth(), CV_8UC3, (uint8_t *)pylonImage.GetBuffer()).clone();
-            metadata.camera_timestamp = ptrGrabResult->GetTimeStamp();
+            auto camera_timestamp_ticks = ptrGrabResult->GetTimeStamp();
+            metadata.camera_timestamp = static_cast<uint64_t>((static_cast<double>(camera_timestamp_ticks) / static_cast<double>(tick_frequency)) * 1e9); // in nanoseconds
 
             /*****************************************
             **   Extract metadata from chunk data   **
@@ -340,9 +348,9 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
             GenApi::CFloatPtr chunkExposure(chunkDataMap.GetNode("ChunkExposureTime"));
             if (GenApi::IsReadable(chunkExposure))
             {
-                double exposure = chunkExposure->GetValue();
-                // std::cout << "Exposure: " << exposure << " µs" << std::endl;
-                metadata.exposureTime = exposure;
+                double exposure_us = chunkExposure->GetValue();
+                // std::cout << "Exposure: " << exposure_us << " µs" << std::endl;
+                metadata.setExposure(static_cast<uint64_t>(exposure_us * 1000.0)); // store in nanoseconds
             }
         
             // GainAll

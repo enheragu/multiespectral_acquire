@@ -65,12 +65,13 @@ void saveMetadataYaml(const ImageMetadata& meta, const std::string& filename)
     YAML::Node node;
     node["imgName"] = meta.img_name;
     node["imgPairName"] = meta.img_pair_name;
-    node["cameraTimestamp"] = meta.camera_timestamp;
-    node["rosTimestamp"] = meta.ros_timestamp;
-    node["systemTimestamp"] = meta.system_timestamp;
-    node["timetag"] = meta.timetag;
+    node["timetag"] = meta.timetag; // string human readable version :)
+    node["cameraTimestamp_ns"] = meta.camera_timestamp;
+    node["rosTimestamp_ns"] = meta.ros_timestamp;
+    node["triggerTimestamp_ns"] = meta.trigger_timestamp;
+    node["halfExposureTimestamp_ns"] = meta.half_exposure_timestamp;
     node["camera.frameCounter"] = meta.frameCounter;
-    node["camera.exposureTime"] = meta.exposureTime;
+    node["camera.exposureTime_ns"] = meta.exposureTime;
     node["camera.gain"] = meta.gain;
     node["camera.width"] = meta.width;
     node["camera.height"] = meta.height;

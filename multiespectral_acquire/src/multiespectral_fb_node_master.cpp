@@ -167,7 +167,7 @@ public:
             // RCLCPP_INFO(get_logger(), "[MAMaster::executeCB] Prepare request for image with timestamp: %lu", timestamp);
             RCLCPP_DEBUG(get_logger(), "[MAMaster::executeCB] Send slave request.");
             auto request = std::make_shared<ImageRequest::Request>();
-            request->timestamp = metadata.getTimestamp();
+            request->timestamp = metadata.getSyncTimestamp();
             request->store = goal->store;
             request->visible_pair = metadata.img_name;
             

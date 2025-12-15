@@ -46,6 +46,7 @@
     Spinnaker::CameraPtr pFlir = nullptr;
     Spinnaker::CameraList flirCamList;
     Spinnaker::SystemPtr flir_system;
+    double camera_exposure_time_ns = 33333333; // (30Hz in nanoseconds)
 
     std::string FLIR_IP = "169.254.165.138";
 
@@ -143,7 +144,7 @@
     {   
         // Reste cameras to a IP range compatible
         // AutoConfigureFlirCamera();
-
+        std::cout << "[FlirAdapter::initCamera] Initialize Spinnaker system (frame_rate " << frame_rate << "; camera_ip " << camera_ip << ")." << std::endl;
         flir_system = Spinnaker::System::GetInstance();
 
         bool result = false;
@@ -244,7 +245,6 @@
                     std::cout << "[FlirAdapter::initCamera] PTP initial status: " << status << std::endl;
                 }
             }
-
             
             result = true;
 
@@ -417,7 +417,9 @@
                 /**************************
                 **   Extract metadata    **
                 ***************************/
-                metadata.camera_timestamp = convertedImage->GetTimeStamp();
+                // Get timestamp in nanoseconds :)
+                auto timestamp_nanoseconds = convertedImage->GetTimeStamp();
+                metadata.camera_timestamp = static_cast<uint64_t>(timestamp_nanoseconds); // in nanoseconds
                 metadata.frameCounter = pResultImage->GetFrameID();
                 metadata.width = pResultImage->GetWidth();
                 metadata.height = pResultImage->GetHeight();
@@ -438,13 +440,14 @@
                 // Exposure
                 Spinnaker::GenApi::CFloatPtr exposureTime = nodemap.GetNode("ExposureTime");
                 if (Spinnaker::GenApi::IsReadable(exposureTime))
-                    metadata.exposureTime = exposureTime->GetValue();
+                    metadata.setExposure(static_cast<uint64_t>(exposureTime->GetValue()));
+                else
+                    metadata.setExposure(camera_exposure_time_ns);
 
                 // Gain
                 Spinnaker::GenApi::CFloatPtr gain = nodemap.GetNode("Gain");
                 if (Spinnaker::GenApi::IsReadable(gain))
                     metadata.gain = gain->GetValue();
-
 
             }      
             pResultImage->Release();  

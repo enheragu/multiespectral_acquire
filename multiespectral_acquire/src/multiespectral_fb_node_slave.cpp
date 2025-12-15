@@ -20,7 +20,7 @@ std::string CAMERA_IP;
 // class MultiespectralAcquire;
 // std::shared_ptr<MultiespectralAcquire> camera_handler_ptr;
 int FLIR_FRAME_RATE = 30;
-const double INTERVAL_BETWEEN_FRAMES_S = 1.0 / double(FLIR_FRAME_RATE+1); // max interval in seconds. ADds extra frame as epsilon
+const double INTERVAL_BETWEEN_FRAMES_S = 1.0 / double(FLIR_FRAME_RATE-1); // max interval in seconds. ADds extra frame as epsilon
 
 class MultiespectralAcquire : public MultiespectralAcquireT
 {
@@ -92,15 +92,15 @@ public:
         else
         {
             // Gets closest (higher or lower)
-            // auto closest_it = std::min_element(image_buffer.begin(), image_buffer.end(),
-            //     [timestamp](const FrameData& a, const FrameData& b) {
-            //         return std::abs(static_cast<int64_t>(a.timestamp - timestamp)) <
-            //             std::abs(static_cast<int64_t>(b.timestamp - timestamp));
-            //     });
+            auto closest_it = std::min_element(image_buffer.begin(), image_buffer.end(),
+                [timestamp](const FrameData& a, const FrameData& b) {
+                    return std::abs(static_cast<int64_t>(a.timestamp - timestamp)) <
+                        std::abs(static_cast<int64_t>(b.timestamp - timestamp));
+                });
             
             // Gets closest (higher or equal)
-            auto closest_it = std::lower_bound(image_buffer.begin(), image_buffer.end(), timestamp,
-                [](const FrameData& a, int64_t ts) { return a.timestamp < ts; });
+            // auto closest_it = std::lower_bound(image_buffer.begin(), image_buffer.end(), timestamp,
+            //     [](const FrameData& a, uint64_t ts) { return a.timestamp < ts; });
             
             if (closest_it == image_buffer.end())
             {
@@ -108,11 +108,6 @@ public:
             }
             
             closest_it->metadata.img_pair_name = request->visible_pair;
-            ret = publishImage(closest_it->image, closest_it->metadata);
-            if(ret && request->store)
-            {
-                ret = ret && storeImage(closest_it->image, closest_it->metadata);
-            }
             
             double time_diff_s = std::abs(static_cast<int64_t>(closest_it->timestamp - timestamp)) / 1e9; // Nanoseconds to seconds conversion
             // RCLCPP_INFO_STREAM(get_logger(),"[MASlave::service_cb] Closest image found -> time difference: " << time_diff_s << " seconds.");
@@ -121,6 +116,12 @@ public:
                 RCLCPP_WARN_STREAM(get_logger(),"[MASlave::service_cb] Closest image to " << timestamp << " is " << closest_it->timestamp << "; time difference: " << time_diff_s << " is greater than interval betweem frames ("<<INTERVAL_BETWEEN_FRAMES_S<<").");
                 response->success = false;
                 return true;
+            }
+            // only publishes and stores image if the time constraints are met
+            ret = publishImage(closest_it->image, closest_it->metadata);
+            if(ret && request->store)
+            {
+                ret = ret && storeImage(closest_it->image, closest_it->metadata);
             }
         }
 
@@ -134,7 +135,7 @@ public:
         { 
             image_buffer.pop_front();
         }
-        image_buffer.push_back({metadata.getTimestamp(), image, metadata});
+        image_buffer.push_back({metadata.getSyncTimestamp(), image, metadata});
     }
 
 private:

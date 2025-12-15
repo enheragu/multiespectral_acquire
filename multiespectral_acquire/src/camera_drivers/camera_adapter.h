@@ -37,11 +37,12 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata);
 bool closeCamera();
 
 struct ImageMetadata {
-    int64_t camera_timestamp;
-    int64_t ros_timestamp;
-    int64_t system_timestamp;
-    int64_t frameCounter;
-    double exposureTime;
+    uint64_t camera_timestamp;        // all in nanoseconds for compatibility
+    uint64_t ros_timestamp;           // all in nanoseconds for compatibility
+    uint64_t trigger_timestamp;       // all in nanoseconds for compatibility
+    uint64_t exposureTime;            // all in nanoseconds for compatibility
+    uint64_t half_exposure_timestamp; // nanoseconds (estimated)
+    uint64_t frameCounter;
     double gain;
     int width;
     int height;
@@ -51,11 +52,12 @@ struct ImageMetadata {
     std::string img_pair_name;
 
     ImageMetadata()
-    : camera_timestamp(-1),
-      ros_timestamp(-1),
-      system_timestamp(-1),
-      frameCounter(-1),
-      exposureTime(-1.0),
+    : camera_timestamp(0),
+      ros_timestamp(0),
+      trigger_timestamp(0),
+      exposureTime(0),
+      half_exposure_timestamp(0),
+      frameCounter(0),
       gain(-1.0),
       width(-1),
       height(-1),
@@ -66,15 +68,21 @@ struct ImageMetadata {
 
     void initTimestamps()
     {
-        auto now = std::chrono::system_clock::now();
+        auto now = std::chrono::steady_clock::now();
         auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
-        this->system_timestamp = nanos;
-        this->timetag = getTimeTag(now);
+        this->trigger_timestamp = nanos;
+        this->timetag = getTimeTag(std::chrono::system_clock::now());
+    }
+
+    void setExposure(uint64_t exposure_ns)
+    {
+        this->exposureTime = exposure_ns;
+        this->half_exposure_timestamp = this->trigger_timestamp + static_cast<uint64_t>(exposure_ns / 2);
     }
 
     // Easy access method to choose which timestamp is used
-    int64_t getTimestamp() const {
-        return system_timestamp;
+    uint64_t getSyncTimestamp() const {
+        return half_exposure_timestamp;
     }
 };
 
