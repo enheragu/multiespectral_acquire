@@ -1,0 +1,24 @@
+<launch>
+  <!-- Argumentos -->
+  <arg name="dataset_output_path" default="/home/quique/umh/ros2_ws/images_eeha"/>
+  <arg name="frame_rate" default="1"/>
+
+  <group ns="Multiespectral">
+    <!-- FLIR LWIR (slave) -->
+    <node pkg="multiespectral_acquire" type="flir_slave" name="lwir_camera" output="screen">
+      <param name="dataset_output_path" value="$(arg dataset_output_path)"/>
+      <param name="frame_rate" value="$(arg frame_rate)"/>
+      <param name="image_topic" value="lwir_camera"/>
+      <param name="camera_info_url" value="file://$(find multiespectral_acquire)/conf/lwir_params.yaml"/>
+    </node>
+
+    <!-- Basler visible (master) -->
+    <node pkg="multiespectral_acquire" type="basler_master" name="visible_camera" output="screen">
+      <param name="dataset_output_path" value="$(arg dataset_output_path)"/>
+      <param name="camera_ip" value="$(env MULTIESPECTRAL_VISIBLE_IP)"/>
+      <param name="frame_rate" value="$(arg frame_rate)"/>
+      <param name="image_topic" value="visible_camera"/>
+      <param name="camera_info_url" value="file://$(find multiespectral_acquire)/conf/visible_params.yaml"/>
+    </node>
+  </group>
+</launch>

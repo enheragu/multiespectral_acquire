@@ -1,64 +1,42 @@
-#include <thread>
-#include <signal.h>
+#include <ros/ros.h>
 #include <memory>
-#include <filesystem>
 #include <deque>
 #include <algorithm>
-
-#include "rclcpp/rclcpp.hpp"
-
 #include "camera_adapter_ros.h"
-#include "multiespectral_acquire/srv/image_request.hpp"
+#include "multiespectral_acquire/ImageRequest.h"
 #include "utils/image_metadata.h"
 
-using ImageRequest = multiespectral_acquire::srv::ImageRequest;
-
-std::string IMAGE_PATH; 
-std::string IMAGE_TOPIC;
-std::string CAMERA_IP;
-
-// class MultiespectralAcquire;
-// std::shared_ptr<MultiespectralAcquire> camera_handler_ptr;
 int FLIR_FRAME_RATE = 30;
-const double INTERVAL_BETWEEN_FRAMES_S = 1.0 / double(FLIR_FRAME_RATE-1); // max interval in seconds. ADds extra frame as epsilon
+const double INTERVAL_BETWEEN_FRAMES_S = 1.0 / double(FLIR_FRAME_RATE-1); // max interval in seconds. Adds extra frame as epsilon
 
 class MultiespectralAcquire : public CameraAdapterROS
 {
 protected:
-    rclcpp::Service<ImageRequest>::SharedPtr service_;
-    
-    // Circular buffer to store images to select closest with timestamp
+    ros::ServiceServer service_;
     struct FrameData {
         uint64_t timestamp;
         cv::Mat image;
         ImageMetadata metadata;
-    };  
+    };
+    // circular buffer to store images to select closest with timestamp
     std::deque<FrameData> image_buffer;
-
-    size_t buffer_size = 1; // Tamaño del buffer 
-
+    size_t buffer_size = 1;
 public:
-    
-    MultiespectralAcquire(std::string name): CameraAdapterROS(name)
+    MultiespectralAcquire(const std::string& name) : CameraAdapterROS(name)
     {
         this->init_and_start_acquisition(this->getFrameRate());
         
         int current_frame_rate = std::min(this->frame_rate, 1);
         this->buffer_size = (int(FLIR_FRAME_RATE/current_frame_rate) + 1)*3;
-
-        service_ = this->create_service<ImageRequest>("multiespectral_slave_service", std::bind(&MultiespectralAcquire::service_cb, this,std::placeholders::_1, std::placeholders::_2));
+        service_ = nh_.advertiseService("multiespectral_slave_service", &MultiespectralAcquire::service_cb, this);
     }
-
-    bool service_cb(const std::shared_ptr<ImageRequest::Request> request, std::shared_ptr<ImageRequest::Response> response)
-    {
-        // logger_->info_stream() << "[MASlave::service_cb] Recieved request to get closest image to: " << req.timestamp;
+    bool service_cb(multiespectral_acquire::ImageRequest::Request &request, multiespectral_acquire::ImageRequest::Response &response) {
         bool ret = false;
-        uint64_t timestamp = request->timestamp; 
-        
+        uint64_t timestamp = request.timestamp;
         if (image_buffer.empty())
         {
             logger_->warn_stream() << "[MASlave::service_cb] Buffer is still empty.";
-            response->success = false;
+            response.success = false;
             return false;
         }
         else
@@ -79,61 +57,55 @@ public:
                 logger_->error_stream() << "[MASlave::service_cb] No image found in buffer with timestamp constraint provided.";
             }
             
-            closest_it->metadata.img_pair_name = request->visible_pair;
+            closest_it->metadata.img_pair_name = request.visible_pair;
             
             double time_diff_s = std::abs(static_cast<int64_t>(closest_it->timestamp - timestamp)) / 1e9; // Nanoseconds to seconds conversion
             // logger_->info_stream() << "[MASlave::service_cb] Closest image found -> time difference: " << time_diff_s << " seconds.";
             if (time_diff_s > INTERVAL_BETWEEN_FRAMES_S)
             {
                 logger_->warn_stream() << "[MASlave::service_cb] Closest image to " << timestamp << " is " << closest_it->timestamp << "; time difference: " << time_diff_s << " is greater than interval betweem frames ("<<INTERVAL_BETWEEN_FRAMES_S<<").";
-                response->success = false;
+                response.success = false;
                 return true;
             }
             // only publishes and stores image if the time constraints are met
             ret = publishImage(closest_it->image, closest_it->metadata);
-            if(ret && request->store)
+            if(ret && request.store)
             {
                 ret = ret && storeImage(closest_it->image, closest_it->metadata);
             }
         }
-
-        response->success = ret;
+        response.success = ret;
         return ret;
     }
-
-    void addImageToBuffer(const cv::Mat& image, ImageMetadata& metadata)
+    void addImageToBuffer(const cv::Mat& image, ImageMetadata& metadata) 
     {
         if (image_buffer.size() >= this->buffer_size)
-        { 
+        {
             image_buffer.pop_front();
         }
         image_buffer.push_back({metadata.getSyncTimestamp(), image, metadata});
     }
-
-private:
-    bool acquisition_loop()
+    void acquisition_loop(const ros::TimerEvent&)
     {
         cv::Mat curr_image(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));  // Init given pattern to check
         createTestPattern(curr_image);
         ImageMetadata metadata;
-        metadata.setROSTimeNowCallback([this]() { return this->get_clock()->now().nanoseconds(); });
+        metadata.setROSTimeNowCallback([]() { return static_cast<uint64_t>(ros::Time::now().toNSec()); });
         bool result = this->grabImage(curr_image, metadata);
-        if (result && !curr_image.empty()) 
+        if (result && !curr_image.empty())
         {
             // cv::imshow("Imagen", curr_image);
             // cv::waitKey(0); // Esperar a que se presione una tecla para cerrar la ventana
             addImageToBuffer(curr_image, metadata);
         }
-        return result;
     }
 
 }; // End class MultiespectralAcquire
 
 int main(int argc, char **argv) {
-    rclcpp::init(argc, argv);
-    rclcpp::NodeOptions options;
-    std::cout << "[multiespectral_fb_node_slave] Starting Multiespectral Acquire Slave Node for "<<getType()<<" images." << std::endl;
-    auto node = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire_Slave_" + getType());
-    rclcpp::spin(node);
-    rclcpp::shutdown();
+    ros::init(argc, argv, "multiespectral_fb_node_slave");
+    ROS_INFO_STREAM("[multiespectral_fb_node_slave] Starting Multiespectral Acquire Slave Node for " << getType() << " images.");
+    std::shared_ptr<MultiespectralAcquire> node = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire_Slave_" + getType());
+    ros::spin();
+    return 0;
 }

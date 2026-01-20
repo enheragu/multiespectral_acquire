@@ -3,8 +3,7 @@
 #include <memory>
 #include <deque>
 
-#include "rclcpp/rclcpp.hpp"
-
+#include <ros/ros.h>
 #include "camera_drivers/camera_adapter.h"
 #include "camera_adapter_ros.h"
 #include "utils/image_metadata.h"
@@ -16,7 +15,7 @@ const double INTERVAL_BETWEEN_FRAMES_S = 1.0 / double(FLIR_FRAME_RATE+1); // max
 class MultiespectralAcquire: public CameraAdapterROS
 {
 public:
-    MultiespectralAcquire(std::string name): CameraAdapterROS(name)
+    MultiespectralAcquire(const std::string& name): CameraAdapterROS(name)
     {
         this->init_and_start_acquisition(this->getFrameRate());
     }
@@ -27,7 +26,7 @@ private:
         cv::Mat curr_image(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));  // Init given pattern to check
         createTestPattern(curr_image);
         ImageMetadata metadata;
-        metadata.setROSTimeNowCallback([this]() { return this->get_clock()->now().nanoseconds(); });
+        metadata.setROSTimeNowCallback([]() { return static_cast<uint64_t>(ros::Time::now().toNSec()); });
         bool result = this->grabPublishImage(curr_image, metadata);
         if (!result) 
         {
@@ -39,10 +38,9 @@ private:
 
 
 int main(int argc, char **argv) {
-    rclcpp::init(argc, argv);
-    rclcpp::NodeOptions options;
-    std::cout << "[multiespectral_fb_node_driver] Starting Multiespectral Acquire Driver Node for "<<getType()<<" images." << std::endl;
-    auto node = std::make_shared<MultiespectralAcquire>("CameraAcquire_Driver_" + getType());
-    rclcpp::spin(node);
-    rclcpp::shutdown();
+    ros::init(argc, argv, "multiespectral_fb_node_driver");
+    ROS_INFO_STREAM("[multiespectral_fb_node_driver] Starting Multiespectral Acquire Driver Node for " << getType() << " images.");
+    std::shared_ptr<MultiespectralAcquire> node = std::make_shared<MultiespectralAcquire>("CameraAcquire_Driver_" + getType());
+    ros::spin();
+    return 0;
 }

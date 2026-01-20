@@ -1,0 +1,3 @@
+<launch>
+  <node pkg="multiespectral_acquire_gui" type="multiespectral_control.py" name="multiespectral_acquire_gui" output="screen"/>
+</launch>

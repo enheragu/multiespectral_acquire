@@ -7,16 +7,11 @@
  *          triggered slave. Note that the action never ends once started unless preempted manually.
  */
 
-
-#include <signal.h>
-#include <memory>
-#include <filesystem>
-
-#include "rclcpp/rclcpp.hpp"
-#include "rclcpp_action/rclcpp_action.hpp"
-#include "multiespectral_acquire/action/multiespectral_acquisition.hpp" 
-#include "multiespectral_acquire/srv/image_request.hpp"
-
+#include <ros/ros.h>
+#include <actionlib/server/simple_action_server.h>
+#include <actionlib/client/simple_action_client.h>
+#include "multiespectral_acquire/MultiespectralAcquisitionAction.h"
+#include "multiespectral_acquire/ImageRequest.h"
 #include "camera_adapter_ros.h"
 #include "utils/image_metadata.h"
 
@@ -24,107 +19,46 @@ std::string IMAGE_PATH;
 std::string IMAGE_TOPIC;
 std::string CAMERA_IP;
 
-// class MultiespectralAcquire;
-// std::shared_ptr<MultiespectralAcquire> camera_handler_ptr;
-using MultiespectralAcquisition = multiespectral_acquire::action::MultiespectralAcquisition;
-using GoalHandle = rclcpp_action::ServerGoalHandle<MultiespectralAcquisition>;
-using ImageRequest = multiespectral_acquire::srv::ImageRequest;
-using MAGoalHandler = rclcpp_action::ServerGoalHandle<MultiespectralAcquisition>;
-
-class MultiespectralAcquire : public CameraAdapterROS
-{
+class MultiespectralAcquire : public CameraAdapterROS {
 protected:
-    
-    rclcpp_action::Server<MultiespectralAcquisition>::SharedPtr action_server_; 
+    actionlib::SimpleActionServer<multiespectral_acquire::MultiespectralAcquisitionAction> action_server_;
     std::string action_name_;
-
-    rclcpp::Client<ImageRequest>::SharedPtr slave_camera_client_;
-
-    std::shared_ptr<MAGoalHandler> active_goal_;
+    ros::ServiceClient slave_camera_client_;
+    multiespectral_acquire::MultiespectralAcquisitionFeedback feedback_;
+    multiespectral_acquire::MultiespectralAcquisitionResult result_;
     std::mutex goal_mutex_;
 public:
-    
-    MultiespectralAcquire(std::string name): CameraAdapterROS(name), action_name_(name)
+    MultiespectralAcquire(const std::string& name)
+        : CameraAdapterROS(name),
+          action_server_(nh_, "AS", boost::bind(&MultiespectralAcquire::execute, this, _1), false),
+          action_name_(name)
     {
         this->init_and_start_acquisition(this->getFrameRate());
-        
-        using namespace std::placeholders;
-
-        auto handle_goal = [this](const rclcpp_action::GoalUUID & uuid,std::shared_ptr<const MultiespectralAcquisition::Goal> goal)
-        {
-            logger_->info_stream() << "Received goal request with store flag as: " << (goal->store ? "true" : "false");
-            (void)uuid;
-            return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
-        };
-
-        auto handle_cancel = [this](const std::shared_ptr<MAGoalHandler> goal_handle)
-        {
-            logger_->info_stream() << "Received request to cancel goal";
-            (void)goal_handle;
-            return rclcpp_action::CancelResponse::ACCEPT;
-        };
-
-
-        auto handle_accepted = [this](const std::shared_ptr<MAGoalHandler> goal_handle) 
-        {
-            std::lock_guard<std::mutex> lock(goal_mutex_);
-            if (active_goal_ && (active_goal_->is_active() || active_goal_->is_canceling())) {
-                active_goal_->canceled(std::make_shared<MultiespectralAcquisition::Result>());
-                logger_->info_stream() << "Previous goal canceled due to new goal arrival.";
-            }
-            active_goal_ = goal_handle;
-            auto execute_in_thread = [this, goal_handle]() { this->execute(goal_handle); };
-            std::thread{execute_in_thread}.detach();
-        };
-
-        this->action_server_ = rclcpp_action::create_server<MultiespectralAcquisition>(
-            this,
-            "AS",
-            handle_goal,
-            handle_cancel,
-            handle_accepted);       
-
-        slave_camera_client_ = this->create_client<ImageRequest>("multiespectral_slave_service");
-
+        slave_camera_client_ = nh_.serviceClient<multiespectral_acquire::ImageRequest>("multiespectral_slave_service");
+        action_server_.start();
     }
 
-    void execute(const std::shared_ptr<MAGoalHandler> goal_handle)
-    { 
-        auto goal = goal_handle->get_goal();
-        auto action_feedback = std::make_shared<MultiespectralAcquisition::Feedback>();
-        auto action_result = std::make_shared<MultiespectralAcquisition::Result>();
-
-        action_feedback->images_acquired = 0;
-        action_feedback->storage_path = "none";
-        logger_->info_stream() << "[MAMaster::execute] Start image acquisition loop. " << std::string(goal->store?"S":"Not s") << "toring images. Frame rate is "<<std::to_string(this->frame_rate) << "Hz for camera " << getName() << ".";
-
-        if (goal->store)
-        {
-            action_feedback->storage_path = img_path;
+    void execute(const multiespectral_acquire::MultiespectralAcquisitionGoalConstPtr& goal) {
+        feedback_.images_acquired = 0;
+        feedback_.storage_path = "none";
+        logger_->info_stream() << "[MAMaster::execute] Start image acquisition loop. " << (goal->store?"S":"Not s") << "toring images. Frame rate is " << this->frame_rate << "Hz for camera " << getName() << ".";
+        if (goal->store) {
+            feedback_.storage_path = img_path;
             logger_->info_stream() << "[MAMaster::execute] Storing images to " << img_path;
         }
-
+        ros::Rate loop_rate(this->frame_rate);
         bool result = true;
-        
-        rclcpp::Rate loop_rate(this->frame_rate);
-        while (rclcpp::ok())
-        {
-            if (goal_handle->is_canceling()) 
-            {
-                goal_handle->canceled(action_result);
+        while (ros::ok() && action_server_.isActive()) {
+            if (action_server_.isPreemptRequested()) {
+                action_server_.setPreempted();
                 logger_->info_stream() << "Goal canceled.";
                 return;
             }
-            if (!goal_handle->is_active()) {
-                logger_->info_stream() << "Goal is not active anymore, stopping execution.";
-                return;
-            }
-
-            cv::Mat curr_image(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));  // Init given pattern to check
+            cv::Mat curr_image(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));
             createTestPattern(curr_image);
 
             ImageMetadata metadata;
-            metadata.setROSTimeNowCallback([this]() { return this->get_clock()->now().nanoseconds(); });
+            metadata.setROSTimeNowCallback([]() { return static_cast<uint64_t>(ros::Time::now().toNSec()); });
             logger_->debug_stream() << "[MAMaster::executeCB] Grabbing image.";
             result = this->grabPublishImage(curr_image, metadata);
             if(result && goal->store)
@@ -132,48 +66,25 @@ public:
                 logger_->debug_stream() << "[MAMaster::executeCB] Storing image.";
                 result = this->storeImage(curr_image, metadata);
             }
-            if (result) 
+            if (result && !curr_image.empty())
             {
-                logger_->debug_stream() << "[MAMaster::executeCB] Update action feedback.";                
-                if (!curr_image.empty())
-                {
-                    action_feedback->images_acquired++;
-                    action_result->images_acquired = action_feedback->images_acquired;
-                }
-                goal_handle->publish_feedback(action_feedback);
+                feedback_.images_acquired++;
+                result_.images_acquired = feedback_.images_acquired;
+                action_server_.publishFeedback(feedback_);
             }
-
-            logger_->debug_stream() << "[MAMaster::executeCB] Send slave request.";
-            auto request = std::make_shared<ImageRequest::Request>();
-            request->timestamp = metadata.getSyncTimestamp();
-            request->store = goal->store;
-            request->visible_pair = metadata.img_name;
-            
-            if (!slave_camera_client_->wait_for_service(std::chrono::seconds(2))) {
-                logger_->error_stream() << "Slave camera service not available";
-                goal_handle->abort(action_result);
+            // Petición al slave
+            multiespectral_acquire::ImageRequest srv;
+            srv.request.timestamp = metadata.getSyncTimestamp();
+            srv.request.store = goal->store;
+            srv.request.visible_pair = metadata.img_name;
+            if (!slave_camera_client_.call(srv)) {
+                logger_->error_stream() << "Slave camera service not available or call failed";
+                action_server_.setAborted(result_);
                 return;
             }
-
-            auto future_result = slave_camera_client_->async_send_request(request);
-            // logger_->info_stream() << "[MAMaster::executeCB] Prepare request for image with timestamp: " << timestamp;
-            // if (rclcpp::spin_until_future_complete(this->get_node_base_interface(), future_result) != rclcpp::FutureReturnCode::SUCCESS) {
-            //     logger_->error_stream() << "Slave camera service call failed";
-            //     goal_handle->abort(action_result);
-            //     return;
-            // }
-
-            // auto service_result = future_result.get();
-            // if (!service_result->success) {
-            //     logger_->error_stream() << "Slave camera service returned failure";
-            //     goal_handle->abort(action_result);
-            //     return;
-            // }
-
             loop_rate.sleep();
         }
-        goal_handle->succeed(action_result);
-
+        action_server_.setSucceeded(result_);
     }
 
 }; // End class MultiespectralAcquire
@@ -181,11 +92,10 @@ public:
 
 
 int main(int argc, char **argv) {
-    rclcpp::init(argc, argv);
-    rclcpp::NodeOptions options;
-    std::cout << "[multiespectral_fb_node_master] Starting Multiespectral Acquire Master Node for "<<getType()<<" images." << std::endl;
-    auto node = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire_Master_" + getType());
-    rclcpp::spin(node);
-    rclcpp::shutdown();
+    ros::init(argc, argv, "multiespectral_fb_node_master");
+    ROS_INFO_STREAM("[multiespectral_fb_node_master] Starting Multiespectral Acquire Master Node for " << getType() << " images.");
+    std::shared_ptr<MultiespectralAcquire> node = std::make_shared<MultiespectralAcquire>("MultiespectralAcquire_Master_" + getType());
+    ros::spin();
+    return 0;
 }
 

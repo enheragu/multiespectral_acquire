@@ -51,9 +51,6 @@ public:
     bool grabPublishImage(cv::Mat& image, ImageMetadata& metadata);
     bool changeFrameRate(int frame_rate);
     
-    // see function definition
-    void dummyCallback(const sensor_msgs::msg::Image::ConstSharedPtr& msg);
-
     int getFrameRate() const { return frame_rate; }
 
     void setLogger(std::shared_ptr<Logger> logger) { logger_ = logger; }

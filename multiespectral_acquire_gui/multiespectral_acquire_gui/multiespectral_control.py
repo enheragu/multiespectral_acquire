@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-from flask import Flask, render_template, request, jsonify
-from flask import make_response
-from flask_socketio import SocketIO, emit
-
 import threading
 import signal
 
-try: 
-    import rclpy 
-    from rclpy.executors import MultiThreadedExecutor
+from flask import Flask, render_template, request, jsonify, make_response
+from flask_socketio import SocketIO, emit
+
+try:
+    import rospy
     from multiespectral_acquire_gui.multiespectral_ros_ac import RosMultiespectralAcquire as MultiespectralAcquire
     using_ros = True
     print(f"[MultiespectralAcquireGui] Using ROS Multiespectral Acquire.")
-except ImportError as e: 
-    print(f"[MultiespectralAcquireGui] ROS2 loading problem: {e}")
+except ImportError as e:
+    print(f"[MultiespectralAcquireGui] ROS loading problem: {e}")
     from multiespectral_acquire_gui.multiespectral_dummy_ac import DummyMultiespectralAcquire as MultiespectralAcquire
     using_ros = False
     print(f"[MultiespectralAcquireGui] No ROS detected. Using Dummy Multiespectral Acquire.")
@@ -69,42 +67,23 @@ def sigint_handler(sig, frame):
     print("[MultiespectralAcquireGui] SIGINT received.")
     if using_ros and camera_handler:
         camera_handler.stop()
-        camera_handler.destroy_node()
-        rclpy.shutdown()
     socketio.stop()
     exit(0)
 
-
-def ros2_thread():
-    rclpy.init()
-    camera_handler = MultiespectralAcquire(socketio)
-    
-    try:
-        rclpy.spin(camera_handler)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        camera_handler.shutdown()
-        camera_handler.destroy_node()
-        rclpy.shutdown()
-
-# ROS expects a main function so here it is...
-def main(args=None):
+def main():
     signal.signal(signal.SIGINT, sigint_handler)
     
     global camera_handler
     
     if using_ros:
-        rclpy.init()
+        rospy.init_node('multiespectral_flask_gui', anonymous=True)
         camera_handler = MultiespectralAcquire(socketio)
-        
-        ros_thread = threading.Thread(target=lambda: rclpy.spin(camera_handler), daemon=True)
-        ros_thread.start()
+        flask_thread = threading.Thread(target=lambda: socketio.run(app, host='0.0.0.0', port=5000, debug=False, use_reloader=False, allow_unsafe_werkzeug=True), daemon=True)
+        flask_thread.start()
+        rospy.spin()
     else:
         camera_handler = MultiespectralAcquire(socketio)
-    
-    socketio.run(app, host='0.0.0.0', port=5000, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
-
+        socketio.run(app, host='0.0.0.0', port=5000, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
 
 if __name__ == '__main__':
     main()
