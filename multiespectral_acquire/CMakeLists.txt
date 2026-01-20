@@ -48,49 +48,61 @@ if(BUILD_TESTING)
 endif()
 
 include_directories(
-  include
-  include/multiespectral_acquire
+  src
+  src/utils
 )
 
-## Executables 
-add_executable(dummy_master src/multiespectral_fb_node_master.cpp src/camera_drivers/dummy_adapter.cpp src/camera_drivers/camera_adapter.cpp )
-add_executable(dummy_slave src/multiespectral_fb_node_slave.cpp src/camera_drivers/dummy_adapter.cpp src/camera_drivers/camera_adapter.cpp )
-add_executable(dummy_driver src/multiespectral_fb_node_driver.cpp src/camera_drivers/dummy_adapter.cpp src/camera_drivers/camera_adapter.cpp )
+## Utils and camera_adapter_ros sources
+set(UTILS_SRC
+  src/utils/image_metadata.cpp
+)
+set(UTILS_HDR
+  src/utils/image_metadata.h
+  src/utils/logging_utils.h
+)
+set(ADAPTER_SRC
+  src/camera_drivers/camera_adapter.cpp
+  src/camera_adapter_ros.cpp
+)
+set(ADAPTER_HDR
+  src/camera_drivers/camera_adapter.h
+  src/camera_adapter_ros.h
+)
 
-add_executable(flir_master src/multiespectral_fb_node_master.cpp src/camera_drivers/flir_adapter.cpp src/camera_drivers/camera_adapter.cpp )
-add_executable(flir_slave src/multiespectral_fb_node_slave.cpp src/camera_drivers/flir_adapter.cpp src/camera_drivers/camera_adapter.cpp )
 
-add_executable(basler_master src/multiespectral_fb_node_master.cpp src/camera_drivers/basler_adapter.cpp src/camera_drivers/camera_adapter.cpp )
-add_executable(basler_slave src/multiespectral_fb_node_slave.cpp src/camera_drivers/basler_adapter.cpp src/camera_drivers/camera_adapter.cpp )
+add_executable(dummy_master src/multiespectral_fb_node_master.cpp src/camera_drivers/dummy_adapter.cpp ${ADAPTER_SRC} ${UTILS_SRC})
+add_executable(dummy_slave src/multiespectral_fb_node_slave.cpp src/camera_drivers/dummy_adapter.cpp ${ADAPTER_SRC} ${UTILS_SRC})
+add_executable(dummy_driver src/multiespectral_fb_node_driver.cpp src/camera_drivers/dummy_adapter.cpp ${ADAPTER_SRC} ${UTILS_SRC})
+add_executable(flir_master src/multiespectral_fb_node_master.cpp src/camera_drivers/flir_adapter.cpp ${ADAPTER_SRC} ${UTILS_SRC})
+add_executable(flir_slave src/multiespectral_fb_node_slave.cpp src/camera_drivers/flir_adapter.cpp ${ADAPTER_SRC} ${UTILS_SRC})
+add_executable(basler_master src/multiespectral_fb_node_master.cpp src/camera_drivers/basler_adapter.cpp ${ADAPTER_SRC} ${UTILS_SRC})
+add_executable(basler_slave src/multiespectral_fb_node_slave.cpp src/camera_drivers/basler_adapter.cpp ${ADAPTER_SRC} ${UTILS_SRC})
 
-## ROS stuff dependencies
-ament_target_dependencies(dummy_master rclcpp camera_info_manager cv_bridge image_transport sensor_msgs std_msgs rclcpp_action)
-ament_target_dependencies(dummy_slave rclcpp camera_info_manager cv_bridge image_transport sensor_msgs std_msgs rclcpp_action)
-ament_target_dependencies(dummy_driver rclcpp camera_info_manager cv_bridge image_transport sensor_msgs std_msgs rclcpp_action)
+foreach(target dummy_master dummy_slave dummy_driver flir_master flir_slave basler_master basler_slave)
+  ament_target_dependencies(${target} rclcpp camera_info_manager cv_bridge image_transport sensor_msgs std_msgs rclcpp_action)
+endforeach()
 
-ament_target_dependencies(flir_master rclcpp camera_info_manager cv_bridge image_transport sensor_msgs std_msgs rclcpp_action)
-ament_target_dependencies(flir_slave rclcpp camera_info_manager cv_bridge image_transport sensor_msgs std_msgs rclcpp_action)
-
-ament_target_dependencies(basler_master rclcpp camera_info_manager cv_bridge image_transport sensor_msgs std_msgs rclcpp_action)
-ament_target_dependencies(basler_slave rclcpp camera_info_manager cv_bridge image_transport sensor_msgs std_msgs rclcpp_action)
-
-## Link libraries
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
-target_link_libraries(dummy_master yaml-cpp ${OpenCV_LIBS} ${cpp_typesupport_target})
-target_link_libraries(dummy_slave yaml-cpp ${OpenCV_LIBS} ${cpp_typesupport_target})
-target_link_libraries(dummy_driver yaml-cpp ${OpenCV_LIBS} ${cpp_typesupport_target})
 
-target_link_libraries(flir_master yaml-cpp ${OpenCV_LIBS} ${cpp_typesupport_target} pthread dl Spinnaker::Spinnaker)
-target_link_libraries(flir_slave yaml-cpp ${OpenCV_LIBS} ${cpp_typesupport_target} pthread dl Spinnaker::Spinnaker)
+# Link libraries según el tipo de ejecutable
+foreach(target dummy_master dummy_slave dummy_driver)
+  target_link_libraries(${target} yaml-cpp ${OpenCV_LIBS} ${cpp_typesupport_target})
+endforeach()
 
-target_link_libraries(basler_master yaml-cpp ${OpenCV_LIBS} ${cpp_typesupport_target} pthread dl pylon::pylon)
-target_link_libraries(basler_slave yaml-cpp ${OpenCV_LIBS} ${cpp_typesupport_target} pthread dl pylon::pylon)
+foreach(target flir_master flir_slave)
+  target_link_libraries(${target} yaml-cpp ${OpenCV_LIBS} ${cpp_typesupport_target} pthread dl Spinnaker::Spinnaker)
+endforeach()
 
+foreach(target basler_master basler_slave)
+  target_link_libraries(${target} yaml-cpp ${OpenCV_LIBS} ${cpp_typesupport_target} pthread dl pylon::pylon)
+endforeach()
 
 ## Install targets, launch files and configuration
 
 install(DIRECTORY include/
   DESTINATION include/)
+install(FILES ${UTILS_HDR} ${ADAPTER_HDR}
+  DESTINATION include/${PROJECT_NAME}/utils)
   
 install(TARGETS
     dummy_master
