@@ -16,6 +16,7 @@
 #include <pylon/BaslerUniversalInstantCamera.h>
 
 #include "camera_adapter.h"
+#include "utils/image_metadata.h"
 
 // Check if available and readable and writable; and combinations of them
 #define CHECK_A(node){if (!IsAvailable(node)) \

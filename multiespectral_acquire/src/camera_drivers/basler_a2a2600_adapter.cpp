@@ -14,6 +14,7 @@
 #include "a2A2600_20gcBAS_pylon_gen/BaslerCameraArray.h"
 
 #include "camera_adapter.h"
+#include "utils/image_metadata.h"
 
 // Check if available and readable and writable; and combinations of them
 #define CHECK_A(node){if (!IsAvailable(node)) \

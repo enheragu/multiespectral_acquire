@@ -17,7 +17,8 @@
 #include "multiespectral_acquire/action/multiespectral_acquisition.hpp" 
 #include "multiespectral_acquire/srv/image_request.hpp"
 
-#include "camera_drivers/camera_adapter.h"
+#include "camera_adapter_ros.h"
+#include "utils/image_metadata.h"
 
 std::string IMAGE_PATH; 
 std::string IMAGE_TOPIC;
@@ -30,7 +31,7 @@ using GoalHandle = rclcpp_action::ServerGoalHandle<MultiespectralAcquisition>;
 using ImageRequest = multiespectral_acquire::srv::ImageRequest;
 using MAGoalHandler = rclcpp_action::ServerGoalHandle<MultiespectralAcquisition>;
 
-class MultiespectralAcquire : public MultiespectralAcquireT
+class MultiespectralAcquire : public CameraAdapterROS
 {
 protected:
     
@@ -43,22 +44,22 @@ protected:
     std::mutex goal_mutex_;
 public:
     
-    MultiespectralAcquire(std::string name): MultiespectralAcquireT(name), action_name_(name)
+    MultiespectralAcquire(std::string name): CameraAdapterROS(name), action_name_(name)
     {
-        this->init(this->getFrameRate());
+        this->init_and_start_acquisition(this->getFrameRate());
         
         using namespace std::placeholders;
 
         auto handle_goal = [this](const rclcpp_action::GoalUUID & uuid,std::shared_ptr<const MultiespectralAcquisition::Goal> goal)
         {
-            RCLCPP_INFO(this->get_logger(), "Received goal request with store flag as: %s", goal->store ? "true" : "false");
+            logger_->info_stream() << "Received goal request with store flag as: " << (goal->store ? "true" : "false");
             (void)uuid;
             return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
         };
 
         auto handle_cancel = [this](const std::shared_ptr<MAGoalHandler> goal_handle)
         {
-            RCLCPP_INFO(this->get_logger(), "Received request to cancel goal");
+            logger_->info_stream() << "Received request to cancel goal";
             (void)goal_handle;
             return rclcpp_action::CancelResponse::ACCEPT;
         };
@@ -69,7 +70,7 @@ public:
             std::lock_guard<std::mutex> lock(goal_mutex_);
             if (active_goal_ && (active_goal_->is_active() || active_goal_->is_canceling())) {
                 active_goal_->canceled(std::make_shared<MultiespectralAcquisition::Result>());
-                RCLCPP_INFO(this->get_logger(), "Previous goal canceled due to new goal arrival.");
+                logger_->info_stream() << "Previous goal canceled due to new goal arrival.";
             }
             active_goal_ = goal_handle;
             auto execute_in_thread = [this, goal_handle]() { this->execute(goal_handle); };
@@ -87,29 +88,6 @@ public:
 
     }
 
-    bool init(int frame_rate)
-    {
-        this->frame_rate = frame_rate;
-        bool result = MultiespectralAcquireT::init(frame_rate);
-        // result = result && setAsMaster();
-
-        if(!result) RCLCPP_FATAL_STREAM(get_logger(),"[MAMaster::init] Could not configure " << getName() << " camera as master.");
-        if(result) RCLCPP_INFO_STREAM(get_logger(),"[MAMaster::init] Initialized " << getName() << " camera as master with "<<this->frame_rate<<"Hz frame rate.");
-        
-        result = result && beginAcquisition();
-        
-        if(result) RCLCPP_INFO_STREAM(get_logger(),SUCCEED_F << "[MAMaster::init] Start image acquisition loop for camera "  << getName() << "." << RESET_F);
-        if(!result) 
-        {
-            RCLCPP_FATAL_STREAM(get_logger(),"[MAMaster::init] Camera init image acquisition failed");
-            RCLCPP_FATAL_STREAM(get_logger(),"[MAMaster::MAMaster] Camera init failed");
-            throw std::runtime_error("[MAMaster::MAMaster] Camera init failed");
-        }
-        RCLCPP_INFO_STREAM(get_logger(), SUCCEED_F << "[MAMaster::MAMaster] Camera "<<getName()<<" ("<<getType()<<") initialized successfully" << RESET_F);
-
-        return result;
-    }
-
     void execute(const std::shared_ptr<MAGoalHandler> goal_handle)
     { 
         auto goal = goal_handle->get_goal();
@@ -118,12 +96,12 @@ public:
 
         action_feedback->images_acquired = 0;
         action_feedback->storage_path = "none";
-        RCLCPP_INFO_STREAM(get_logger(),"[MAMaster::execute] Start image acquisition loop. " << std::string(goal->store?"S":"Not s") << "toring images. Frame rate is "<<std::to_string(this->frame_rate) << "Hz for camera " << getName() << ".");
+        logger_->info_stream() << "[MAMaster::execute] Start image acquisition loop. " << std::string(goal->store?"S":"Not s") << "toring images. Frame rate is "<<std::to_string(this->frame_rate) << "Hz for camera " << getName() << ".";
 
         if (goal->store)
         {
             action_feedback->storage_path = img_path;
-            RCLCPP_INFO_STREAM(get_logger(),"[MAMaster::execute] Storing images to " << img_path);
+            logger_->info_stream() << "[MAMaster::execute] Storing images to " << img_path;
         }
 
         bool result = true;
@@ -134,11 +112,11 @@ public:
             if (goal_handle->is_canceling()) 
             {
                 goal_handle->canceled(action_result);
-                RCLCPP_INFO(this->get_logger(), "Goal canceled.");
+                logger_->info_stream() << "Goal canceled.";
                 return;
             }
             if (!goal_handle->is_active()) {
-                RCLCPP_INFO(this->get_logger(), "Goal is not active anymore, stopping execution.");
+                logger_->info_stream() << "Goal is not active anymore, stopping execution.";
                 return;
             }
 
@@ -146,16 +124,17 @@ public:
             createTestPattern(curr_image);
 
             ImageMetadata metadata;
-            RCLCPP_DEBUG(get_logger(), "[MAMaster::executeCB] Grabbing image.");
+            metadata.setROSTimeNowCallback([this]() { return this->get_clock()->now().nanoseconds(); });
+            logger_->debug_stream() << "[MAMaster::executeCB] Grabbing image.";
             result = this->grabPublishImage(curr_image, metadata);
             if(result && goal->store)
             {
-                RCLCPP_DEBUG(get_logger(), "[MAMaster::executeCB] Storing image.");
+                logger_->debug_stream() << "[MAMaster::executeCB] Storing image.";
                 result = this->storeImage(curr_image, metadata);
             }
             if (result) 
             {
-                RCLCPP_DEBUG(get_logger(), "[MAMaster::executeCB] Update action feedback.");                
+                logger_->debug_stream() << "[MAMaster::executeCB] Update action feedback.";                
                 if (!curr_image.empty())
                 {
                     action_feedback->images_acquired++;
@@ -164,30 +143,29 @@ public:
                 goal_handle->publish_feedback(action_feedback);
             }
 
-            // RCLCPP_INFO(get_logger(), "[MAMaster::executeCB] Prepare request for image with timestamp: %lu", timestamp);
-            RCLCPP_DEBUG(get_logger(), "[MAMaster::executeCB] Send slave request.");
+            logger_->debug_stream() << "[MAMaster::executeCB] Send slave request.";
             auto request = std::make_shared<ImageRequest::Request>();
             request->timestamp = metadata.getSyncTimestamp();
             request->store = goal->store;
             request->visible_pair = metadata.img_name;
             
             if (!slave_camera_client_->wait_for_service(std::chrono::seconds(2))) {
-                RCLCPP_ERROR_STREAM(get_logger(), "Slave camera service not available");
+                logger_->error_stream() << "Slave camera service not available";
                 goal_handle->abort(action_result);
                 return;
             }
 
             auto future_result = slave_camera_client_->async_send_request(request);
-            // RCLCPP_INFO(get_logger(), "[MAMaster::executeCB] Sent request request and spin until completed.");
+            // logger_->info_stream() << "[MAMaster::executeCB] Prepare request for image with timestamp: " << timestamp;
             // if (rclcpp::spin_until_future_complete(this->get_node_base_interface(), future_result) != rclcpp::FutureReturnCode::SUCCESS) {
-            //     RCLCPP_ERROR(get_logger(), "Slave camera service call failed");
+            //     logger_->error_stream() << "Slave camera service call failed";
             //     goal_handle->abort(action_result);
             //     return;
             // }
 
             // auto service_result = future_result.get();
             // if (!service_result->success) {
-            //     RCLCPP_ERROR(get_logger(), "Slave camera service returned failure");
+            //     logger_->error_stream() << "Slave camera service returned failure";
             //     goal_handle->abort(action_result);
             //     return;
             // }

@@ -1,4 +1,3 @@
-
 #include <thread>
 #include <signal.h>
 #include <memory>
@@ -8,8 +7,9 @@
 
 #include "rclcpp/rclcpp.hpp"
 
-#include "camera_drivers/camera_adapter.h"
+#include "camera_adapter_ros.h"
 #include "multiespectral_acquire/srv/image_request.hpp"
+#include "utils/image_metadata.h"
 
 using ImageRequest = multiespectral_acquire::srv::ImageRequest;
 
@@ -22,11 +22,8 @@ std::string CAMERA_IP;
 int FLIR_FRAME_RATE = 30;
 const double INTERVAL_BETWEEN_FRAMES_S = 1.0 / double(FLIR_FRAME_RATE-1); // max interval in seconds. ADds extra frame as epsilon
 
-class MultiespectralAcquire : public MultiespectralAcquireT
+class MultiespectralAcquire : public CameraAdapterROS
 {
-private:
-    rclcpp::TimerBase::SharedPtr timer_;
-
 protected:
     rclcpp::Service<ImageRequest>::SharedPtr service_;
     
@@ -42,50 +39,25 @@ protected:
 
 public:
     
-    MultiespectralAcquire(std::string name): MultiespectralAcquireT(name)
+    MultiespectralAcquire(std::string name): CameraAdapterROS(name)
     {
-        this->init(this->getFrameRate());
-        service_ = this->create_service<ImageRequest>("multiespectral_slave_service", std::bind(&MultiespectralAcquire::service_cb, this,std::placeholders::_1, std::placeholders::_2));
-    }
-
-    bool init(int frame_rate)
-    {
-        this->frame_rate = frame_rate;
+        this->init_and_start_acquisition(this->getFrameRate());
+        
         int current_frame_rate = std::min(this->frame_rate, 1);
         this->buffer_size = (int(FLIR_FRAME_RATE/current_frame_rate) + 1)*3;
-        
-        bool result = MultiespectralAcquireT::init(frame_rate);
-        // result = result && setAsSlave();
 
-        if(!result) RCLCPP_FATAL_STREAM(get_logger(),"[MASlave::init] Could not configure " << getName() << " camera as slave.");
-        if(result) RCLCPP_INFO_STREAM(get_logger(),"[MASlave::init] Initialized " << getName() << " camera as slave.");
-
-        result = result && beginAcquisition();
-        
-        if(result) RCLCPP_INFO_STREAM(get_logger(),SUCCEED_F << "[MASlave::init] Start image acquisition loop for camera "  << getName() << "." << RESET_F);
-        if(!result) RCLCPP_FATAL_STREAM(get_logger(),"[MASlave::init] Camera init image acquisition failed");        
-
-        timer_ = this->create_wall_timer(
-            std::chrono::duration<double>(1.0/FLIR_FRAME_RATE),
-            std::bind(&MultiespectralAcquire::acquisition_loop, this));
-
-        if (!result) 
-        {
-            throw std::runtime_error("[MASlave::MASlave] Camera init failed");
-        }
-        RCLCPP_INFO_STREAM(get_logger(), SUCCEED_F << "[MASlave::MASlave] Camera "<<getName()<<" ("<<getType()<<") initialized successfully" << RESET_F);
-        return result;
+        service_ = this->create_service<ImageRequest>("multiespectral_slave_service", std::bind(&MultiespectralAcquire::service_cb, this,std::placeholders::_1, std::placeholders::_2));
     }
 
     bool service_cb(const std::shared_ptr<ImageRequest::Request> request, std::shared_ptr<ImageRequest::Response> response)
     {
-        // RCLCPP_INFO("[MASlave::service_cb] Recieved request to get closest image to: %lu", req.timestamp);
+        // logger_->info_stream() << "[MASlave::service_cb] Recieved request to get closest image to: " << req.timestamp;
         bool ret = false;
         uint64_t timestamp = request->timestamp; 
         
         if (image_buffer.empty())
         {
-            RCLCPP_WARN_STREAM(get_logger(),"[MASlave::service_cb] Buffer is still empty.");
+            logger_->warn_stream() << "[MASlave::service_cb] Buffer is still empty.";
             response->success = false;
             return false;
         }
@@ -104,16 +76,16 @@ public:
             
             if (closest_it == image_buffer.end())
             {
-                RCLCPP_ERROR_STREAM(get_logger(),"[MASlave::service_cb] No image found in buffer with timestamp constraint provided.");
+                logger_->error_stream() << "[MASlave::service_cb] No image found in buffer with timestamp constraint provided.";
             }
             
             closest_it->metadata.img_pair_name = request->visible_pair;
             
             double time_diff_s = std::abs(static_cast<int64_t>(closest_it->timestamp - timestamp)) / 1e9; // Nanoseconds to seconds conversion
-            // RCLCPP_INFO_STREAM(get_logger(),"[MASlave::service_cb] Closest image found -> time difference: " << time_diff_s << " seconds.");
+            // logger_->info_stream() << "[MASlave::service_cb] Closest image found -> time difference: " << time_diff_s << " seconds.";
             if (time_diff_s > INTERVAL_BETWEEN_FRAMES_S)
             {
-                RCLCPP_WARN_STREAM(get_logger(),"[MASlave::service_cb] Closest image to " << timestamp << " is " << closest_it->timestamp << "; time difference: " << time_diff_s << " is greater than interval betweem frames ("<<INTERVAL_BETWEEN_FRAMES_S<<").");
+                logger_->warn_stream() << "[MASlave::service_cb] Closest image to " << timestamp << " is " << closest_it->timestamp << "; time difference: " << time_diff_s << " is greater than interval betweem frames ("<<INTERVAL_BETWEEN_FRAMES_S<<").";
                 response->success = false;
                 return true;
             }
@@ -144,6 +116,7 @@ private:
         cv::Mat curr_image(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));  // Init given pattern to check
         createTestPattern(curr_image);
         ImageMetadata metadata;
+        metadata.setROSTimeNowCallback([this]() { return this->get_clock()->now().nanoseconds(); });
         bool result = this->grabImage(curr_image, metadata);
         if (result && !curr_image.empty()) 
         {

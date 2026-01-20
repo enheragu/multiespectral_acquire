@@ -4,6 +4,7 @@
 
 
 #include "camera_adapter.h"
+#include "utils/image_metadata.h"
 
 
 bool aquisition_status = false;
