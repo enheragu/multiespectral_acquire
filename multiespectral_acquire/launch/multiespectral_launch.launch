@@ -20,5 +20,20 @@
       <param name="image_topic" value="visible_camera"/>
       <param name="camera_info_url" value="file://$(find multiespectral_acquire)/conf/visible_params.yaml"/>
     </node>
+
+    <node pkg="multiespectral_acquire" type="lidar_slave" name="lidar_camera" output="screen">
+      <param name="dataset_output_path" value="$(arg dataset_output_path)"/>
+      <param name="lidar_topic" value="/os_cloud_node/points"/>
+      <param name="lidar_frame_rate" value="20"/>
+      
+      <!-- FOV Configuration -->
+      <param name="fov_enabled" value="true"/>
+      <param name="fov_use_angular" value="true"/>
+      <param name="fov_h_min_deg" value="-20"/>
+      <param name="fov_h_max_deg" value="20"/>
+      <param name="fov_v_min_deg" value="-15"/>
+      <param name="fov_v_max_deg" value="15"/>
+    </node>
+
   </group>
 </launch>

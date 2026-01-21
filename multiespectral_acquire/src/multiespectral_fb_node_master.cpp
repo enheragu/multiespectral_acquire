@@ -58,6 +58,7 @@ public:
             createTestPattern(curr_image);
 
             ImageMetadata metadata;
+            metadata.dataset_name = this->dataset_name;
             metadata.setROSTimeNowCallback([]() { return static_cast<uint64_t>(ros::Time::now().toNSec()); });
             logger_->debug_stream() << "[MAMaster::executeCB] Grabbing image.";
             result = this->grabPublishImage(curr_image, metadata);
@@ -76,7 +77,7 @@ public:
             multiespectral_acquire::ImageRequest srv;
             srv.request.timestamp = metadata.getSyncTimestamp();
             srv.request.store = goal->store;
-            srv.request.visible_pair = metadata.img_name;
+            srv.request.reference_pair = metadata.img_name;
             if (!slave_camera_client_.call(srv)) {
                 logger_->error_stream() << "Slave camera service not available or call failed";
                 action_server_.setAborted(result_);
@@ -85,6 +86,11 @@ public:
             loop_rate.sleep();
         }
         action_server_.setSucceeded(result_);
+    }
+    
+    // Override required by virtual method in CameraAdapterROS
+    void acquisition_loop(const ros::TimerEvent&) override {
+        // Not used, the master uses its own loop in execute()
     }
 
 }; // End class MultiespectralAcquire

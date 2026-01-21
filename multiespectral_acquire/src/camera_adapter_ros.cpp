@@ -21,10 +21,7 @@ CameraAdapterROS::CameraAdapterROS(const std::string& node_name)
     nh_.param<std::string>("camera_ip", camera_ip, "");
     nh_.param<std::string>("camera_info_url", camera_info_cfg, "");
 
-    img_path = dataset_output_path+std::string("/")+getFolderTimetag()+std::string("/")+getType()+std::string("/");
-    std::filesystem::create_directories(img_path);
-    logger_ = std::make_shared<RosLogger>();
-    logger_->info_stream() << "[CameraAdapterROS] Images will be stored in path: " << img_path;
+    this->init_store_folder(dataset_output_path);
     logger_->info_stream() << "[CameraAdapterROS] ROS parameters configured as: " << std::endl
         << " - image_topic: " << topic_name << std::endl
         << " - frame_rate: " << frame_rate;
@@ -80,18 +77,6 @@ bool CameraAdapterROS::publishImage(cv::Mat& curr_image, ImageMetadata& metadata
 bool CameraAdapterROS::init_and_start_acquisition(int frame_rate) {
     this->frame_rate = frame_rate;
     bool result = CameraAdapter::init(frame_rate);
-
-    if(!result) logger_->fatal_stream() << "[CameraAdapterROS::init] Could not configure " << getName() << " camera.";
-    if(result) logger_->info_stream() << "[CameraAdapterROS::init] Initialized " << getName() << " camera.";
-    
-    result = result && beginAcquisition();
-    
-    if(result) logger_->info_stream() << SUCCEED_F << "[MADriver::init] Start image acquisition loop for camera "  << getName() << "." << RESET_F;
-    if(!result)
-    {
-        logger_->fatal_stream() << "[CameraAdapterROS::init] Camera init image acquisition failed";
-        throw std::runtime_error("[CameraAdapterROS::init] Camera init failed");
-    }
     
     timer_ = nh_.createTimer(ros::Duration(1.0/this->frame_rate), &CameraAdapterROS::acquisition_loop, this);
     

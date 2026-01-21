@@ -13,6 +13,7 @@ class MultiespectralAcquire : public CameraAdapterROS
 {
 protected:
     ros::ServiceServer service_;
+    ros::ServiceClient lidar_client_;
     struct FrameData {
         uint64_t timestamp;
         cv::Mat image;
@@ -26,9 +27,10 @@ public:
     {
         this->init_and_start_acquisition(this->getFrameRate());
         
-        int current_frame_rate = std::min(this->frame_rate, 1);
+        int current_frame_rate = std::max(this->frame_rate, 1);
         this->buffer_size = (int(FLIR_FRAME_RATE/current_frame_rate) + 1)*3;
         service_ = nh_.advertiseService("multiespectral_slave_service", &MultiespectralAcquire::service_cb, this);
+        lidar_client_ = nh_.serviceClient<multiespectral_acquire::ImageRequest>("lidar_slave_service");
     }
     bool service_cb(multiespectral_acquire::ImageRequest::Request &request, multiespectral_acquire::ImageRequest::Response &response) {
         bool ret = false;
@@ -57,13 +59,13 @@ public:
                 logger_->error_stream() << "[MASlave::service_cb] No image found in buffer with timestamp constraint provided.";
             }
             
-            closest_it->metadata.img_pair_name = request.visible_pair;
+            closest_it->metadata.img_pair_name = request.reference_pair;
             
             double time_diff_s = std::abs(static_cast<int64_t>(closest_it->timestamp - timestamp)) / 1e9; // Nanoseconds to seconds conversion
             // logger_->info_stream() << "[MASlave::service_cb] Closest image found -> time difference: " << time_diff_s << " seconds.";
             if (time_diff_s > INTERVAL_BETWEEN_FRAMES_S)
             {
-                logger_->warn_stream() << "[MASlave::service_cb] Closest image to " << timestamp << " is " << closest_it->timestamp << "; time difference: " << time_diff_s << " is greater than interval betweem frames ("<<INTERVAL_BETWEEN_FRAMES_S<<").";
+                logger_->warn_stream() << "[MASlave::service_cb] Closest image to " << timestamp << " is " << closest_it->timestamp << "; time difference: " << time_diff_s << " is greater than interval between frames ("<<INTERVAL_BETWEEN_FRAMES_S<<").";
                 response.success = false;
                 return true;
             }
@@ -73,6 +75,22 @@ public:
             {
                 ret = ret && storeImage(closest_it->image, closest_it->metadata);
             }
+            
+            // Try to call LIDAR service to store corresponding pointcloud and intensity image
+            if (lidar_client_.exists()) {
+                multiespectral_acquire::ImageRequest lidar_srv;
+                lidar_srv.request.timestamp = closest_it->timestamp; // Both LWIR and LIDAR use PTP, so this one should be the best timestamp
+                lidar_srv.request.reference_pair = request.reference_pair;
+                lidar_srv.request.store = request.store;
+                if (!lidar_client_.call(lidar_srv)) {
+                    logger_->warn_stream() << "[MASlave::service_cb] LIDAR service call failed.";
+                } else if (!lidar_srv.response.success) {
+                    logger_->warn_stream() << "[MASlave::service_cb] LIDAR service responded but failed.";
+                }
+            } else {
+                logger_->warn_stream() << "[MASlave::service_cb] LIDAR service not available.";
+            }
+            
         }
         response.success = ret;
         return ret;
@@ -85,11 +103,12 @@ public:
         }
         image_buffer.push_back({metadata.getSyncTimestamp(), image, metadata});
     }
-    void acquisition_loop(const ros::TimerEvent&)
+    void acquisition_loop(const ros::TimerEvent&) override
     {
         cv::Mat curr_image(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));  // Init given pattern to check
         createTestPattern(curr_image);
         ImageMetadata metadata;
+        metadata.dataset_name = this->dataset_name;
         metadata.setROSTimeNowCallback([]() { return static_cast<uint64_t>(ros::Time::now().toNSec()); });
         bool result = this->grabImage(curr_image, metadata);
         if (result && !curr_image.empty())

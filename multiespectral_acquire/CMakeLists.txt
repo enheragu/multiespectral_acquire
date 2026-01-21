@@ -33,6 +33,7 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
   include
   include/multiespectral_acquire
+  src  # For lidar_drivers/ and utils/ headers
 )
 
 # Utils and core sources
@@ -58,8 +59,15 @@ add_executable(basler_master src/multiespectral_fb_node_master.cpp src/camera_dr
 add_executable(basler_slave src/multiespectral_fb_node_slave.cpp src/camera_drivers/basler_adapter.cpp ${CAMERA_CORE} ${MULTISPECTRAL_UTILS})
 add_executable(basler_driver src/multiespectral_fb_node_driver.cpp src/camera_drivers/basler_adapter.cpp ${CAMERA_CORE} ${MULTISPECTRAL_UTILS})
 
+# LiDAR sources (header-only for now, utils shared with cameras)
+set(LIDAR_UTILS
+  src/utils/image_metadata.cpp
+)
+
+add_executable(lidar_slave src/lidar_fb_node_slave.cpp ${LIDAR_UTILS})
+
 # Link libraries
-foreach(target dummy_master dummy_slave dummy_driver flir_master flir_slave flir_driver basler_master basler_slave basler_driver)
+foreach(target dummy_master dummy_slave dummy_driver flir_master flir_slave flir_driver basler_master basler_slave basler_driver lidar_slave)
   target_link_libraries(${target} ${catkin_LIBRARIES} yaml-cpp ${OpenCV_LIBS})
   add_dependencies(${target} ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 endforeach()
@@ -68,6 +76,7 @@ install(TARGETS
   dummy_master dummy_slave dummy_driver
   flir_master flir_slave flir_driver
   basler_master basler_slave basler_driver
+  lidar_slave
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 install(DIRECTORY include/

@@ -9,9 +9,6 @@
 #include "utils/image_metadata.h"
 
 
-int FLIR_FRAME_RATE = 30;
-const double INTERVAL_BETWEEN_FRAMES_S = 1.0 / double(FLIR_FRAME_RATE+1); // max interval in seconds. ADds extra frame as epsilon
-
 class MultiespectralAcquire: public CameraAdapterROS
 {
 public:
@@ -22,10 +19,11 @@ public:
 
     
 private:
-    void acquisition_loop() {
+    void acquisition_loop(const ros::TimerEvent&) override {
         cv::Mat curr_image(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));  // Init given pattern to check
         createTestPattern(curr_image);
         ImageMetadata metadata;
+        metadata.dataset_name = this->dataset_name;
         metadata.setROSTimeNowCallback([]() { return static_cast<uint64_t>(ros::Time::now().toNSec()); });
         bool result = this->grabPublishImage(curr_image, metadata);
         if (!result) 
