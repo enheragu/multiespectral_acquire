@@ -1,9 +1,11 @@
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/Image.h>
+#include <cv_bridge/cv_bridge.h>
 #include "multiespectral_acquire/ImageRequest.h"
 #include "lidar_drivers/lidar_adapter.h"
 
-int LIDAR_FRAME_RATE = 20;
+int LIDAR_FRAME_RATE = 20; // Real frame rate of the sensor
 
 inline PointCloud2Data toPointCloud2Data(const sensor_msgs::PointCloud2& ros_cloud) {
     PointCloud2Data cloud;
@@ -31,24 +33,66 @@ inline PointCloud2Data toPointCloud2Data(const sensor_msgs::PointCloud2& ros_clo
     return cloud;
 }
 
+inline sensor_msgs::PointCloud2 toRosPointCloud2(const PointCloud2Data& cloud, const std::string& frame_id = "lidar") {
+    sensor_msgs::PointCloud2 ros_cloud;
+    ros_cloud.height = cloud.height;
+    ros_cloud.width = cloud.width;
+    ros_cloud.point_step = cloud.point_step;
+    ros_cloud.row_step = cloud.row_step;
+    ros_cloud.is_dense = cloud.is_dense;
+    ros_cloud.is_bigendian = cloud.is_bigendian;
+    ros_cloud.header.stamp.sec = cloud.timestamp_ns / 1000000000ULL;
+    ros_cloud.header.stamp.nsec = cloud.timestamp_ns % 1000000000ULL;
+    ros_cloud.header.seq = cloud.seq;
+    ros_cloud.header.frame_id = frame_id;
+    ros_cloud.data = cloud.data;
+    
+    ros_cloud.fields.reserve(cloud.fields.size());
+    for (const auto& f : cloud.fields) {
+        sensor_msgs::PointField field;
+        field.name = f.name;
+        field.offset = f.offset;
+        field.datatype = f.datatype;
+        field.count = f.count;
+        ros_cloud.fields.push_back(field);
+    }
+    return ros_cloud;
+}
+
 class LidarAcquire : public LidarAdapterSlave {
     ros::NodeHandle nh_;
     ros::Subscriber sub_;
     ros::ServiceServer service_;
+    
+    ros::Publisher pc_pub_;
+    ros::Publisher img_pub_;
+    
+    std::string pc_topic_;
+    std::string img_topic_;
+    std::string frame_id_;
 
 public:
     LidarAcquire(const std::string& topic, const std::string& dataset_output_path) {
         setLogger(std::make_shared<RosLogger>("LidarAcquire"));
         
         int configured_rate = 10;
-        nh_.param<int>("lidar_frame_rate", configured_rate, 10);
+        nh_.param<int>("frame_rate", configured_rate, 10);
+        nh_.param<int>("lidar_acq_frame_rate", LIDAR_FRAME_RATE, LIDAR_FRAME_RATE);
+        nh_.param<std::string>("pointcloud_topic", pc_topic_, "lidar_pointcloud");
+        nh_.param<std::string>("image_topic", img_topic_, "lidar_intensity");
+        nh_.param<std::string>("frame_id", frame_id_, "lidar");
+        
         init_buffer(LIDAR_FRAME_RATE, configured_rate);
         init_store_folder(dataset_output_path);
         loadFOVConfig();
         
         sub_ = nh_.subscribe(topic, 10, &LidarAcquire::pointcloud_cb, this);
         service_ = nh_.advertiseService("lidar_slave_service", &LidarAcquire::service_cb, this);
-        logger_->info_stream() << "[LADriver] Initialized with topic: " << topic;
+        pc_pub_ = nh_.advertise<sensor_msgs::PointCloud2>(pc_topic_, 1);
+        img_pub_ = nh_.advertise<sensor_msgs::Image>(img_topic_, 1);
+        
+        logger_->info_stream() << "[LADriver] Initialized. Input: " << topic 
+                               << ", PC out: " << pc_topic_ << ", Img out: " << img_topic_;
     }
     
     void loadFOVConfig() {
@@ -76,6 +120,22 @@ public:
         processPointCloud(cloud, frame, fov_config_, fov_enabled_);
         frame.fillMetadata(cloud.timestamp_ns, cloud.seq, dataset_name_, LIDAR_FRAME_RATE);
         addFrameToBuffer(frame);
+        
+        // Publish processed pointcloud
+        if (pc_pub_.getNumSubscribers() > 0) {
+            sensor_msgs::PointCloud2 pc_msg = toRosPointCloud2(frame.pointcloud, frame_id_);
+            pc_pub_.publish(pc_msg);
+        }
+        
+        // Publish intensity image
+        if (img_pub_.getNumSubscribers() > 0 && !frame.intensity_image.empty()) {
+            std_msgs::Header header;
+            header.stamp.sec = cloud.timestamp_ns / 1000000000ULL;
+            header.stamp.nsec = cloud.timestamp_ns % 1000000000ULL;
+            header.frame_id = frame_id_;
+            cv_bridge::CvImage cv_img(header, "mono8", frame.intensity_image);
+            img_pub_.publish(cv_img.toImageMsg());
+        }
     }
 
     bool service_cb(multiespectral_acquire::ImageRequest::Request &request,
@@ -122,7 +182,7 @@ int main(int argc, char **argv) {
     ros::NodeHandle nh("~");
     
     std::string topic, dataset_output_path;
-    nh.param<std::string>("lidar_topic", topic, "/os_cloud_node/points");
+    nh.param<std::string>("input_lidar_topic", topic, "/os_cloud_node/points");
     nh.param<std::string>("dataset_output_path", dataset_output_path, ".");
     
     LidarAcquire node(topic, dataset_output_path);

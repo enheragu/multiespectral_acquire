@@ -1,6 +1,6 @@
 <launch>
   <!-- Argumentos -->
-  <arg name="dataset_output_path" default="/home/quique/umh/ros2_ws/images_eeha"/>
+  <arg name="dataset_output_path" default="/home/clearpath/images_eeha"/>
   <arg name="frame_rate" default="1"/>
 
   <group ns="Multiespectral">
@@ -23,9 +23,12 @@
 
     <node pkg="multiespectral_acquire" type="lidar_slave" name="lidar_camera" output="screen">
       <param name="dataset_output_path" value="$(arg dataset_output_path)"/>
-      <param name="lidar_topic" value="/os_cloud_node/points"/>
-      <param name="lidar_frame_rate" value="20"/>
-      
+      <param name="input_lidar_topic" value="/os_cloud_node/points"/>
+      <param name="pointcloud_topic" value="lidar_pointcloud"/>
+      <param name="image_topic" value="swir_lidar"/>
+      <param name="frame_rate" value="$(arg frame_rate)"/>
+      <param name="lidar_acq_frame_rate" value="20"/>
+
       <!-- FOV Configuration -->
       <param name="fov_enabled" value="true"/>
       <param name="fov_use_angular" value="true"/>

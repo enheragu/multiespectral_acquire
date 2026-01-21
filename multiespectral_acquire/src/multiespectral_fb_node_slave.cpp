@@ -7,7 +7,6 @@
 #include "utils/image_metadata.h"
 
 int FLIR_FRAME_RATE = 30;
-const double INTERVAL_BETWEEN_FRAMES_S = 1.0 / double(FLIR_FRAME_RATE-1); // max interval in seconds. Adds extra frame as epsilon
 
 class MultiespectralAcquire : public CameraAdapterROS
 {
@@ -63,7 +62,8 @@ public:
             
             double time_diff_s = std::abs(static_cast<int64_t>(closest_it->timestamp - timestamp)) / 1e9; // Nanoseconds to seconds conversion
             // logger_->info_stream() << "[MASlave::service_cb] Closest image found -> time difference: " << time_diff_s << " seconds.";
-            if (time_diff_s > INTERVAL_BETWEEN_FRAMES_S)
+            double max_diff = 1.0 / double(std::max(1, FLIR_FRAME_RATE - 1));
+            if (time_diff_s > max_diff)
             {
                 logger_->warn_stream() << "[MASlave::service_cb] Closest image to " << timestamp << " is " << closest_it->timestamp << "; time difference: " << time_diff_s << " is greater than interval between frames ("<<INTERVAL_BETWEEN_FRAMES_S<<").";
                 response.success = false;
