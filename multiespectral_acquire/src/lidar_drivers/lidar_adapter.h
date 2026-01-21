@@ -99,7 +99,7 @@ public:
         
         std::string folder = dataset_output_path_ + "/" + dataset_name_ + "/";
         pc_path_ = folder + "PointCloud/";
-        intensity_path_ = folder + "Intensity/";
+        intensity_path_ = folder + "swir/";
         
         try {
             std::filesystem::create_directories(pc_path_);
