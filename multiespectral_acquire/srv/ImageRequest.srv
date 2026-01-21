@@ -1,5 +1,5 @@
 # Solicitud
-string visible_pair
+string reference_pair
 uint64 timestamp
 bool store
 ---

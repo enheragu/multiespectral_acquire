@@ -38,9 +38,12 @@ protected:
     std::string camera_ip;
     std::string camera_info_cfg;
 
+    std::string dataset_name;
+
 public:
     ~CameraAdapter(void);
     bool init(int frame_rate);
+    bool init_store_folder(std::string output_dataset_path);
     bool grabImage(cv::Mat& curr_image, ImageMetadata& metadata);
     virtual bool publishImage(cv::Mat& curr_image, ImageMetadata& metadata) {
         std::cerr << "[CameraAdapter] publishImage() called on core adapter. This should be implemented in a middleware-specific subclass (e.g., CameraAdapterROS)." << std::endl;
@@ -48,7 +51,6 @@ public:
     }
     bool grabPublishImage(cv::Mat& image, ImageMetadata& metadata);
     bool storeImage(cv::Mat& curr_image, ImageMetadata& metadata);
-    bool grabPublishImage(cv::Mat& image, ImageMetadata& metadata);
     bool changeFrameRate(int frame_rate);
     
     int getFrameRate() const { return frame_rate; }

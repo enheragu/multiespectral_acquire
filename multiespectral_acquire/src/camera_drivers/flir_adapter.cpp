@@ -390,6 +390,7 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
     {
         metadata.initTimestamps(); //Stores timetag when requested to avoid communication delay difference between cameras
         pFlir->TriggerSoftware.Execute();
+        metadata.triggerAck();
         pResultImage = pFlir->GetNextImage(5000);
         if (!pResultImage)
         {

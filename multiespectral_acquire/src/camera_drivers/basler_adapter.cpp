@@ -294,6 +294,7 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
         // Wait for an image and then retrieve it. A timeout of 1000 ms is used.
         metadata.initTimestamps(); //Stores timetag when requested to avoid communication delay difference between cameras
         pBasler->ExecuteSoftwareTrigger();
+        metadata.triggerAck();
         pBasler->RetrieveResult( 1000, ptrGrabResult, Pylon::TimeoutHandling_ThrowException);
         
         // Image grabbed successfully?

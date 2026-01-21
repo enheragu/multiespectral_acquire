@@ -7,7 +7,6 @@
 #include <iomanip>
 #include <filesystem>
 
-#include "rclcpp/rclcpp.hpp"
 #include "utils/image_metadata.h"
 
 #include "camera_adapter.h"
@@ -39,8 +38,31 @@ bool CameraAdapter::init(int frame_rate)
     bool result = initCamera(frame_rate, this->camera_ip);
     if(!result) logger_->error_stream() << "[CameraAdapter::init] Could not initialize " << getName() << " camera.";
 
+    if(result) logger_->info_stream() << "[CameraAdapter::init] Initialized " << getName() << " camera.";
+    
+    result = result && beginAcquisition();
+
+    if(result) logger_->info_stream() << SUCCEED_F << "[CameraAdapter::init] Start image acquisition loop for camera "  << getName() << "." << RESET_F;
+    if(!result)
+    {
+        logger_->fatal_stream() << "[CameraAdapter::init] Camera init image acquisition failed";
+        throw std::runtime_error("[CameraAdapter::init] Camera init failed");
+    }
+
     return result;
 }
+
+bool init_store_folder(std::string output_dataset_path)
+{
+    this->dataset_name = getFolderTimetag();
+    img_path = dataset_output_path+std::string("/")+this->dataset_name+std::string("/")+getType()+std::string("/");
+    std::filesystem::create_directories(img_path);
+    logger_ = std::make_shared<RosLogger>();
+    logger_->info_stream() << "[CameraAdapterROS] Images will be stored in path: " << img_path;
+
+    return true;
+}
+
 
 bool CameraAdapter::changeFrameRate(int frame_rate)
 {

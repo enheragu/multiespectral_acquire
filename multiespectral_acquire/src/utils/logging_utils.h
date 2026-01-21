@@ -28,11 +28,13 @@ public:
     virtual void info(const std::string& msg) = 0;
     virtual void warn(const std::string& msg) = 0;
     virtual void error(const std::string& msg) = 0;
+    virtual void fatal(const std::string& msg) = 0;
 
     virtual LoggerStreamHelper debug_stream() { return LoggerStreamHelper([this](const std::string& s){ debug(s); }); }
     virtual LoggerStreamHelper info_stream() { return LoggerStreamHelper([this](const std::string& s){ info(s); }); }
     virtual LoggerStreamHelper warn_stream() { return LoggerStreamHelper([this](const std::string& s){ warn(s); }); }
     virtual LoggerStreamHelper error_stream() { return LoggerStreamHelper([this](const std::string& s){ error(s); }); }
+    virtual LoggerStreamHelper fatal_stream() { return LoggerStreamHelper([this](const std::string& s){ fatal(s); }); }
     virtual ~Logger() = default;
 };
 
