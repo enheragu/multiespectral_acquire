@@ -1,4 +1,4 @@
-#include "utils/image_metadata.h"
+#include "core/utils/image_metadata.h"
 #include <yaml-cpp/yaml.h>
 #include <fstream>
 #include <chrono>
@@ -40,10 +40,6 @@ std::string getUTCTimeTag() {
 
 ImageMetadata::ImageMetadata()
     : camera_timestamp(0),
-      ros_timestamp(0),
-      trigger_timestamp(0),
-      trigger_sent_timestamp(0),
-      trigger_ack_timestamp(0),
       exposureTime(0),
       half_exposure_timestamp(0),
       frameCounter(0),
@@ -61,58 +57,10 @@ void ImageMetadata::setROSTimeNowCallback(ROSTimeNowCallback cb) {
     ros_time_now_cb_ = cb;
 }
 
-void ImageMetadata::setTimestampSource(TimeStampSource source)
-{
-    this->timestamp_source_config = source;
-}
-
-
-void ImageMetadata::initTimestamps() {
-    // UTC portable: time_t + ajuste ns
-    auto now = std::chrono::system_clock::now();
-    std::time_t utc_seconds = std::time(nullptr);  // UTC seconds
-    auto nanos_total = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
-    auto utc_nanos = static_cast<int64_t>(utc_seconds) * 1000000000LL + 
-                     (nanos_total % 1000000000LL);  // Segs UTC + ns resto
-    
-    this->trigger_sent_timestamp = utc_nanos;
-    this->timetag = getUTCTimeTag();  // Versión UTC de getTimeTag()
-
-    if (ros_time_now_cb_) {
-        this->ros_timestamp = ros_time_now_cb_();
-    } else {
-        this->ros_timestamp = 0;
-    }
-}
-
-// When trigger finishes updates trigger timestamp to half of it
-void ImageMetadata::triggerAck() {
-    std::time_t utc_seconds = std::time(nullptr);
-    auto nanos_total = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-    auto utc_nanos = static_cast<int64_t>(utc_seconds) * 1000000000LL + 
-                     (nanos_total % 1000000000LL);
-    
-    this->trigger_ack_timestamp = utc_nanos;
-    auto trigger_processing_time = (this->trigger_ack_timestamp - this->trigger_sent_timestamp);
-    this->trigger_timestamp = this->trigger_sent_timestamp + trigger_processing_time/2;
-}
-
 void ImageMetadata::setExposure(uint64_t exposure_ns) {
     this->exposureTime = exposure_ns;
-    if (this->timestamp_source_config == TimeStampSource::USE_COMPUTED_TRIGGER)
-    {
-        this->half_exposure_timestamp = this->trigger_timestamp + static_cast<uint64_t>(exposure_ns / 2);
-    }
-    else if (this->timestamp_source_config == TimeStampSource::USE_INTERNAL_CAMERA)
-    {
-        this->half_exposure_timestamp = this->camera_timestamp + static_cast<uint64_t>(exposure_ns / 2);
-    }
-    else
-    {
-        this->half_exposure_timestamp = this->trigger_timestamp + static_cast<uint64_t>(exposure_ns / 2);
-    }
-    
+    // Half exposure timestamp = camera timestamp + half of exposure duration
+    this->half_exposure_timestamp = this->camera_timestamp + static_cast<uint64_t>(exposure_ns / 2);
 }
 
 uint64_t ImageMetadata::getSyncTimestamp() const {
@@ -125,10 +73,6 @@ void ImageMetadata::saveYaml(const std::string& filename) const {
     node["img_name"] = img_name;
     node["timetag"] = timetag;
     node["camera_timestamp"] = camera_timestamp;
-    node["ros_timestamp"] = ros_timestamp;
-    node["trigger_timestamp"] = trigger_timestamp;
-    node["trigger_sent_timestamp"] = trigger_sent_timestamp;
-    node["trigger_ack_timestamp"] = trigger_ack_timestamp;
     node["half_exposure_timestamp"] = half_exposure_timestamp;
     node["frameCounter"] = frameCounter;
     node["exposureTime"] = exposureTime;

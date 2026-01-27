@@ -14,7 +14,8 @@
 #include "SpinGenApi/SpinnakerGenApi.h"
 
 #include "camera_adapter.h"
-#include "utils/image_metadata.h"
+#include "core/utils/image_metadata.h"
+#include "core/utils/timestamp_calibration.h"
 
 
 // Check if available and readable and writable; and combinations of them
@@ -47,16 +48,57 @@
 Spinnaker::CameraPtr pFlir = nullptr;
 Spinnaker::CameraList flirCamList;
 Spinnaker::SystemPtr flir_system;
+std::string camera_name = "Default:FlirA68";  // Display name (usually ROS node name)
+std::string model_name = "Unknown";  // Camera model name
 double camera_exposure_time_ns = 33333333; // (30Hz in nanoseconds)
+bool ptp_supported = false;
+bool force_disable_ptp = false;  // Set true to force manual calibration even if PTP available
+
+// Global variable to store calibration
+TimestampCalibration g_calibration;
 
 std::string FLIR_IP = "169.254.165.138";
 
 /**
-    * @brief Get name of the camera for logging purposes
-    */
+ * @brief Set the display name for the camera (typically the ROS node name)
+ */
+void setNodeName(const std::string& name)
+{
+    camera_name = name;
+}
+
+/**
+ * @brief Get name of the camera for logging purposes (returns node name if set, model otherwise)
+ */
 std::string getName()
 {
-    return "Flir A68";
+    // Return node name if set, otherwise model name
+    if(camera_name == "Default:FlirA68" && model_name != "Unknown")
+    {
+        return std::string("FLIR ") + model_name;
+    }
+    return camera_name;
+}
+
+/**
+ * @brief Get the camera model name
+ */
+std::string getModelName()
+{
+    if(pFlir && pFlir->IsValid())
+    {
+        try {
+            Spinnaker::GenApi::INodeMap& nodeMap = pFlir->GetTLDeviceNodeMap();
+            Spinnaker::GenApi::CStringPtr ptrModelName = nodeMap.GetNode("DeviceModelName");
+            if (IsAvailable(ptrModelName) && IsReadable(ptrModelName))
+            {
+                model_name = std::string(ptrModelName->GetValue());
+            }
+        } catch (...) {
+            // Ignore errors
+        }
+    }
+    return model_name;
 }
 
 /**
@@ -65,6 +107,58 @@ std::string getName()
 std::string getType()
 {
     return "lwir";
+}
+
+/**
+ * @brief Calibrate FLIR timestamps using linear regression
+ */
+TimestampCalibration calibrateTimestamps(int num_samples = 30) {
+    std::vector<int64_t> camera_times, pc_times;
+    
+    std::cout << "[FlirAdapter::calibrateTimestamps] Waiting for camera stabilization (2 seconds)..." << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    
+    std::cout << "[FlirAdapter::calibrateTimestamps] Capturing " << num_samples << " samples for calibration..." << std::endl;
+    
+    for(int i = 0; i < num_samples; i++) {
+        auto pc_start = std::chrono::system_clock::now();
+        
+        // Trigger + capture
+        pFlir->TriggerSoftware.Execute();
+        Spinnaker::ImagePtr pResultImage = pFlir->GetNextImage(5000);
+        
+        if(!pResultImage->IsIncomplete()) {
+            int64_t cam_ns = pResultImage->GetTimeStamp();
+            auto pc_end = std::chrono::system_clock::now();
+            
+            // Average PC time (reduce jitter)
+            int64_t pc_ns = (pc_start.time_since_epoch().count() + 
+                           pc_end.time_since_epoch().count()) / 2;
+            
+            camera_times.push_back(cam_ns);
+            pc_times.push_back(pc_ns);
+        }
+        
+        pResultImage->Release();
+        
+        // Space out samples (except the last one)
+        if(i < num_samples - 1) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+    
+    if(camera_times.size() < 3) {
+        std::cerr << "[FlirAdapter::calibrateTimestamps] ERROR: Not enough valid samples (" 
+                  << camera_times.size() << "). Using default calibration." << std::endl;
+        TimestampCalibration default_cal;
+        default_cal.slope = 1.0;
+        default_cal.offset_ns = 0;
+        default_cal.initialized = true;
+        return default_cal;
+    }
+    
+    // Use performInitialCalibration from utils (FLIR timestamps are already in nanoseconds, so tick_freq = 1e9)
+    return performInitialCalibration(camera_times, pc_times, 1000000000LL, getName());
 }
 
 /**
@@ -192,7 +286,7 @@ bool initCamera(int frame_rate, std::string camera_ip)
         CHECK_AR(ptrAcquisitionModeContinuous);
         const int64_t acquisitionModeContinuous = ptrAcquisitionModeContinuous->GetValue();
         ptrAcquisitionMode->SetIntValue(acquisitionModeContinuous);
-        std::cout << "[FlirAdapter::initCamera] Acquisition mode set to COntinuous..." << std::endl;
+        std::cout << "[FlirAdapter::initCamera] Acquisition mode set to Continuous..." << std::endl;
 
         // Spinnaker::GenApi::CEnumEntryPtr ptrAcquisitionModeSingleFrame = ptrAcquisitionMode->GetEntryByName("SingleFrame");
         // CHECK_AR(ptrAcquisitionModeSingleFrame);
@@ -225,27 +319,29 @@ bool initCamera(int frame_rate, std::string camera_ip)
 
 
         // Enable PTP
-        Spinnaker::GenApi::CEnumerationPtr ptrPtpMode = nodeMap.GetNode("ptpMode");
-        CHECK_AW(ptrPtpMode)
-        Spinnaker::GenApi::CEnumEntryPtr ptrPtpModeAutomatic = ptrPtpMode->GetEntryByName("Automatic");
-        ptrPtpMode->SetIntValue(ptrPtpModeAutomatic->GetValue());
-        std::cout << "[FlirAdapter::initCamera] PTP Mode: Automatic" << std::endl;
-        
-        // Spinnaker::GenApi::CIntegerPtr ptrPriority1 = nodeMap.GetNode("ptpPriority1");
-        // if (Spinnaker::GenApi::IsAvailable(ptrPriority1)) {
-        //     ptrPriority1->SetValue(128);  
-        // }
-
-        Spinnaker::GenApi::CEnumerationPtr ptpStatusNode = nodeMap.GetNode("GevIEEE1588Status");
-        if (Spinnaker::GenApi::IsReadable(ptpStatusNode))
-        {
-            auto entry = ptpStatusNode->GetCurrentEntry();
-            if (Spinnaker::GenApi::IsReadable(entry))
-            {
-                std::string status = std::string(entry->GetSymbolic());
-                std::cout << "[FlirAdapter::initCamera] PTP initial status: " << status << std::endl;
+        try {
+            if (force_disable_ptp) {
+                std::cout << "[FlirAdapter::initCamera] PTP force disabled by parameter. Will use manual timestamp calibration." << std::endl;
+                ptp_supported = false;
+            } else {
+                Spinnaker::GenApi::CEnumerationPtr ptrPtpMode = nodeMap.GetNode("ptpMode");
+                CHECK_AW(ptrPtpMode)
+                Spinnaker::GenApi::CEnumEntryPtr ptrPtpModeAutomatic = ptrPtpMode->GetEntryByName("Automatic");
+                ptrPtpMode->SetIntValue(ptrPtpModeAutomatic->GetValue());
+                std::cout << "[FlirAdapter::initCamera] PTP Mode: Automatic" << std::endl;
+                ptp_supported = true;
             }
         }
+        catch (Spinnaker::Exception& e) {
+            std::cout << "[FlirAdapter::initCamera] Could not enable PTP: " << e.what() 
+                      << ". Will use manual timestamp calibration." << std::endl;
+            ptp_supported = false;
+        }
+        
+        // Get and log camera model information
+        getModelName();  // This populates model_name
+        std::cout << "[" << getName() << "] Camera model: " << model_name << std::endl;
+        std::cout << "[" << getName() << "] PTP support: " << (ptp_supported ? "YES (hardware synchronized)" : "NO (using manual calibration)") << std::endl;
         
         result = true;
 
@@ -276,6 +372,13 @@ bool beginAcquisition()
     {
         std::cout << "[FlirAdapter::beginAcquisition] Acquisition already started." << std::endl;
     }
+    
+    // Timestamp calibration initialization if PTP not available
+    if (!ptp_supported)
+    {
+        g_calibration = calibrateTimestamps(60);
+    }
+    
     return true;
 }
 
@@ -288,6 +391,12 @@ bool endAcquisition()
     if (pFlir->IsStreaming())
     {
         std::cout << "[FlirAdapter::endAcquisition] End acquisition." << std::endl;
+        
+        // Show final calibration statistics
+        if (!ptp_supported && g_calibration.initialized) {
+            g_calibration.printFinalStats();
+        }
+        
         pFlir->EndAcquisition();
     }
     else
@@ -388,12 +497,13 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
     Spinnaker::ImagePtr pResultImage = nullptr;
     try
     {
-        // if ptp enabled:
-        metadata.setTimestampSource(TimeStampSource::USE_INTERNAL_CAMERA);
-        metadata.initTimestamps(); //Stores timetag when requested to avoid communication delay difference between cameras
+        // Capture timestamp before/after trigger for calibration
+        auto pc_start = std::chrono::system_clock::now();
+        
         pFlir->TriggerSoftware.Execute();
-        metadata.triggerAck();
         pResultImage = pFlir->GetNextImage(5000);
+        
+        auto pc_end = std::chrono::system_clock::now();
         if (!pResultImage)
         {
             std::cout << "[FlirAdapter::acquireImage] No grab result reference." << std::endl;
@@ -421,9 +531,23 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
             /**************************
             **   Extract metadata    **
             ***************************/
-            // Get timestamp in nanoseconds :)
+            // Get timestamp in nanoseconds (already in ns for FLIR)
             auto timestamp_nanoseconds = convertedImage->GetTimeStamp();
-            metadata.camera_timestamp = static_cast<uint64_t>(timestamp_nanoseconds); // in nanoseconds
+            metadata.camera_timestamp = static_cast<uint64_t>(timestamp_nanoseconds);
+            
+            // Apply calibration if PTP not available
+            if (!ptp_supported) {
+                metadata.camera_timestamp = g_calibration.offset_ns + 
+                                           timestamp_nanoseconds * g_calibration.slope;
+            }
+            
+            // Update calibration with this new sample
+            if (!ptp_supported) {
+                int64_t pc_ns = (pc_start.time_since_epoch().count() + 
+                               pc_end.time_since_epoch().count()) / 2;
+                g_calibration.updateWithSample(timestamp_nanoseconds, pc_ns, 1000000000LL);
+            }
+            
             metadata.frameCounter = pResultImage->GetFrameID();
             metadata.width = pResultImage->GetWidth();
             metadata.height = pResultImage->GetHeight();

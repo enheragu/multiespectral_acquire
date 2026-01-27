@@ -1,0 +1,46 @@
+<launch>
+  <!-- Arguments passed from parent launch -->
+  <arg name="output_path"/>
+  <arg name="master_topic"/>
+  
+  <!-- Additional topics -->
+  <arg name="gnss_topic" default="/gnss/fix"/>
+  <arg name="odom_topic" default="/odometry/filtered"/>
+  
+  <!-- NOTE: exposure_time_ns is NOT needed for ImageWithMetadata messages -->
+  <!-- The buffer handler will automatically read exposure_time from msg.metadata.exposure_time -->
+
+  <!-- Frontal camera buffer (master = auto store_all) -->
+  <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_frontal" output="screen">
+    <param name="handler_type" value="image"/>
+    <param name="data_topic" value="frontal_camera/image_with_metadata"/>
+    <param name="output_path" value="$(arg output_path)/frontal"/>
+  </node>
+
+  <!-- Rear camera buffer (synced with frontal as master) -->
+  <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_rear" output="screen">
+    <param name="handler_type" value="image"/>
+    <param name="data_topic" value="rear_camera/image_with_metadata"/>
+    <param name="master_topic" value="$(arg master_topic)"/>
+    <param name="output_path" value="$(arg output_path)/rear"/>
+    <param name="max_time_diff" value="0.5"/>
+    <!-- exposure_time auto-detected from message metadata -->
+  </node>
+
+  <!-- GNSS buffer (synced with frontal) -->
+  <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_gnss" output="screen">
+    <param name="data_topic" value="$(arg gnss_topic)"/>
+    <param name="master_topic" value="$(arg master_topic)"/>
+    <param name="output_path" value="$(arg output_path)/gnss"/>
+    <param name="max_time_diff" value="1.5"/>
+  </node>
+
+  <!-- Odometry buffer (synced with frontal) -->
+  <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_odom" output="screen">
+    <param name="data_topic" value="$(arg odom_topic)"/>
+    <param name="master_topic" value="$(arg master_topic)"/>
+    <param name="output_path" value="$(arg output_path)/odom"/>
+    <param name="max_time_diff" value="1.5"/>
+  </node>
+
+</launch>

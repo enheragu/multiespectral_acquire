@@ -17,9 +17,11 @@
 #include <pylon/BaslerUniversalInstantCamera.h>
 
 #include "camera_adapter.h"
-#include "utils/image_metadata.h"
+#include "core/utils/image_metadata.h"
+#include "core/utils/timestamp_calibration.h"
 
 // Check if available and readable and writable; and combinations of them
+// These macros FAIL the function if the node is not available (for CRITICAL settings)
 #define CHECK_A(node){if (!IsAvailable(node)) \
 { \
     std::cout << "[BaslerAdapter::" << __func__ << "] " << #node << " is not available." << std::endl; \
@@ -39,6 +41,14 @@
 #define CHECK_AW(node) {CHECK_A(node); CHECK_W(node); }
 #define CHECK_ARW(node) {CHECK_A(node); CHECK_R(node); CHECK_W(node); }
 
+// Optional checks - just warn and continue (for NON-CRITICAL settings)
+#define TRY_CONFIG(node) \
+    if (!IsAvailable(node)) { \
+        std::cout << "[BaslerAdapter::" << __func__ << "] " << #node << " not available (skipping)." << std::endl; \
+    } else if (!IsWritable(node)) { \
+        std::cout << "[BaslerAdapter::" << __func__ << "] " << #node << " not writable (skipping)." << std::endl; \
+    } else
+
 #define CHECK_POINTER(pointer){if (!pointer) \
 { \
     std::cout << "[BaslerAdapter::" << __func__ << "] " << #pointer << " is not available." << std::endl; \
@@ -47,114 +57,52 @@
 
 // Reference to basler camera to be handled
 std::unique_ptr<Pylon::CBaslerUniversalInstantCamera> pBasler;
-std::string camera_name = "Default:acA1600-60gc";
+std::string camera_name = "Default:acA1600-60gc";  // Display name (usually ROS node name)
+std::string model_name = "Unknown";  // Camera model name
 int64_t tick_frequency = 1000000; // ticks per second default 1 MHz
-
-
-struct TimestampCalibration {
-    int64_t offset_ns = 0;
-    double slope = 1.0;
-    
-    bool initialized = false;
-    double alpha = 0.05; // Smoothing factor (lower = more conservative)
-    int samples_count = 0;
-    
-    std::unique_ptr<std::deque<double>> recent_errors_ms;
-    static constexpr size_t max_buffer_size = 100;
-    
-    TimestampCalibration() : recent_errors_ms(new std::deque<double>()) {}
-    // Movement constructor
-    TimestampCalibration(TimestampCalibration&& other) noexcept = default;
-    // Movement assignment operator
-    TimestampCalibration& operator=(TimestampCalibration&& other) noexcept = default;
-    
-    void updateWithSample(int64_t cam_ticks, int64_t pc_ns, int64_t tick_freq) {
-        if (!initialized) return;
-        
-        double cam_ns = cam_ticks * 1e9 / tick_freq;
-        double predicted_pc_ns = offset_ns + slope * cam_ns;
-        
-        double error_ns = pc_ns - predicted_pc_ns;
-        double error_ms = error_ns / 1e6;
-        
-        // DEBUG each 10 frames updated
-        static int debug_counter = 0;
-        if (++debug_counter % 10 == 0) {
-            std::cout << "[DEBUG] cam_ticks=" << cam_ticks 
-                    << ", cam_ns=" << cam_ns/1e9 << "s"
-                    << ", pc_ns=" << pc_ns/1e9 << "s"
-                    << ", offset=" << offset_ns/1e6 << "ms"
-                    << ", slope=" << slope
-                    << ", error=" << error_ms << "ms" << std::endl;
-        }
-        
-        recent_errors_ms->push_back(error_ms);
-        if (recent_errors_ms->size() > max_buffer_size) {
-            recent_errors_ms->pop_front();
-        }
-        
-        // Update with exponential filter only if error is not anomalous (< 50ms)
-        if (std::abs(error_ms) < 50.0) {
-            offset_ns += alpha * error_ns;
-            samples_count++;
-            
-            // Log every 100 samples
-            if (samples_count % 100 == 0) {
-                double mean_error = 0;
-                for (double e : *recent_errors_ms) mean_error += e;
-                mean_error /= recent_errors_ms->size();
-                
-                double std_dev = 0;
-                for (double e : *recent_errors_ms) {
-                    std_dev += (e - mean_error) * (e - mean_error);
-                }
-                std_dev = std::sqrt(std_dev / recent_errors_ms->size());
-                
-                std::cout << "[TimestampCalibration::updateWithSample] Adaptive #" << samples_count 
-                          << " - Offset: " << offset_ns/1e6 << " ms"
-                          << ", Mean error: " << mean_error << " ms (±" << std_dev << " ms)" 
-                          << std::endl;
-            }
-        } else {
-            std::cout << "[TimestampCalibration::updateWithSample] Anomalous sample ignored (error: " << error_ms << " ms)" << std::endl;
-        }
-    }
-    
-    double getMeanError() const {
-        if (recent_errors_ms->empty()) return 0.0;
-        double sum = 0;
-        for (double e : *recent_errors_ms) sum += e;
-        return sum / recent_errors_ms->size();
-    }
-
-    double getStdDevError() const {
-        if (recent_errors_ms->size() < 2) return 0.0;
-        double mean = getMeanError();
-        double sum_sq = 0;
-        for (double e : *recent_errors_ms) {
-            sum_sq += (e - mean) * (e - mean);
-        }
-        return std::sqrt(sum_sq / recent_errors_ms->size());
-    }
-};
+bool ptp_supported = false;
+bool force_disable_ptp = false;  // Set true to force manual calibration even if PTP available
 
 // Global variable to store calibration
 TimestampCalibration g_calibration;
 
 /**
- * @brief Get name of the camera for logging purposes
+ * @brief Set the display name for the camera (typically the ROS node name)
+ */
+void setNodeName(const std::string& name)
+{
+    camera_name = name;
+}
+
+/**
+ * @brief Get name of the camera for logging purposes (returns node name if set, model otherwise)
  */
 std::string getName()
 {
+    // Update model name if camera available
     if(pBasler)
     {
-        camera_name = std::string("Basler ") + std::string(pBasler->GetDeviceInfo().GetModelName());
+        model_name = std::string(pBasler->GetDeviceInfo().GetModelName());
     }
-    else
+    
+    // Return node name if set, otherwise model name
+    if(camera_name == "Default:acA1600-60gc" && model_name != "Unknown")
     {
-        std::cout << "[BaslerAdapter::getName] pBasler pointer is not available." << std::endl;
+        return std::string("Basler ") + model_name;
     }
     return camera_name;
+}
+
+/**
+ * @brief Get the camera model name
+ */
+std::string getModelName()
+{
+    if(pBasler)
+    {
+        model_name = std::string(pBasler->GetDeviceInfo().GetModelName());
+    }
+    return model_name;
 }
 
 /**
@@ -165,7 +113,7 @@ std::string getType()
     return "visible";
 }
 
-TimestampCalibration calibrateTimestamps(int num_samples = 10) {
+TimestampCalibration calibrateTimestamps(int num_samples = 30) {
     std::vector<int64_t> camera_times, pc_times;
     
     std::cout << "[BaslerAdapter::calibrateTimestamps] Waiting for camera stabilization (2 seconds)..." << std::endl;
@@ -191,13 +139,6 @@ TimestampCalibration calibrateTimestamps(int num_samples = 10) {
             
             camera_times.push_back(cam_ticks);
             pc_times.push_back(pc_ns);
-            
-            std::cout << "[BaslerAdapter::calibrateTimestamps] Sample " << (i+1) << "/" << num_samples 
-                      << " - Cam ticks: " << cam_ticks << ", PC ns: " << pc_ns << std::endl;
-        }
-        else
-        {
-            std::cout << "[BaslerAdapter::calibrateTimestamps] Error capturing sample " << (i+1) << std::endl;
         }
         
         // Space out samples (except the last one)
@@ -216,55 +157,8 @@ TimestampCalibration calibrateTimestamps(int num_samples = 10) {
         return default_cal;
     }
     
-    // Regresión lineal: pc_time = slope * cam_time + offset
-    double sum_x = 0, sum_y = 0, sum_xy = 0, sum_xx = 0;
-    int n = camera_times.size();
-    
-    for(size_t i = 0; i < camera_times.size(); i++) {
-        double cam_ns = camera_times[i] * 1e9 / tick_frequency;
-        sum_x += cam_ns; 
-        sum_y += pc_times[i];
-        sum_xy += cam_ns * pc_times[i]; 
-        sum_xx += cam_ns * cam_ns;
-    }
-    
-    TimestampCalibration cal;
-    cal.slope = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
-    cal.offset_ns = (sum_y - cal.slope * sum_x) / n;
-    cal.initialized = true;
-    
-    // Calcular R² correctamente
-    double mean_y = sum_y / n;
-    double ss_tot = 0, ss_res = 0;
-    double max_error_ms = 0;
-    
-    for(size_t i = 0; i < camera_times.size(); i++) {
-        double cam_ns = camera_times[i] * 1e9 / tick_frequency;
-        double predicted = cal.offset_ns + cal.slope * cam_ns;
-        double error = pc_times[i] - predicted;
-        
-        ss_res += error * error;
-        ss_tot += (pc_times[i] - mean_y) * (pc_times[i] - mean_y);
-        
-        double error_ms = std::abs(error) / 1e6;
-        max_error_ms = std::max(max_error_ms, error_ms);
-    }
-    
-    double r_squared = 1.0 - (ss_res / ss_tot);
-    
-    std::cout << "[BaslerAdapter::calibrateTimestamps] Initial results:" << std::endl;
-    std::cout << "              - Slope: " << cal.slope << std::endl;
-    std::cout << "              - Offset: " << cal.offset_ns/1e6 << " ms" << std::endl;
-    std::cout << "              - R²: " << r_squared << std::endl;
-    std::cout << "              - Max error: " << max_error_ms << " ms" << std::endl;
-    std::cout << "              - Adaptive calibration ENABLED (alpha=" << cal.alpha << ")" << std::endl;
-    
-    if(r_squared < 0.99) {
-        std::cerr << "[BaslerAdapter::calibrateTimestamps] WARNING: Low R² (" << r_squared 
-                  << "). Calibration may not be reliable." << std::endl;
-    }
-    
-    return cal;
+    // Use performInitialCalibration from utils
+    return performInitialCalibration(camera_times, pc_times, tick_frequency, getName());
 }
 
 /**
@@ -280,8 +174,40 @@ bool initCamera(int frame_rate, std::string camera_ip)
         std::cout << "[BaslerAdapter::initCamera] Initialize Pylon runtime for basler camera (frame_rate " << frame_rate << "; camera_ip " << camera_ip << ")." << std::endl;
         Pylon::PylonInitialize();
         
-        // This takes first available
-        pBasler = std::unique_ptr<Pylon::CBaslerUniversalInstantCamera>(new Pylon::CBaslerUniversalInstantCamera(Pylon::CTlFactory::GetInstance().CreateFirstDevice()));
+        // Enumerate devices and find by IP
+        Pylon::CTlFactory& tl_factory = Pylon::CTlFactory::GetInstance();
+        Pylon::DeviceInfoList_t device_list;
+        
+        if (0 == tl_factory.EnumerateDevices(device_list))
+        {
+            std::cerr << "[BaslerAdapter::initCamera] No available camera devices." << std::endl;
+            return false;
+        }
+        else
+        {
+            bool found_desired_device = false;
+            Pylon::DeviceInfoList_t::const_iterator it;
+            for (it = device_list.begin(); it != device_list.end(); ++it)
+            {
+                std::string device_ip_found(it->GetIpAddress());
+                if (0 == camera_ip.compare(device_ip_found))
+                {
+                    std::cout << "[BaslerAdapter::initCamera] Found camera device:"
+                    << " Device Model: " << it->GetModelName() << "; "
+                    << " with Device User Id: " << it->GetUserDefinedName() << std::endl;
+                    
+                    pBasler = std::unique_ptr<Pylon::CBaslerUniversalInstantCamera>(new Pylon::CBaslerUniversalInstantCamera(tl_factory.CreateDevice(*it)));
+                    found_desired_device = true;
+                    break;
+                }
+            }
+
+            if (!found_desired_device)
+            {
+                std::cerr << "[BaslerAdapter::initCamera] Could not find camera with configured IP: " << camera_ip << std::endl;
+                return false;
+            }
+        }
 
         if (!pBasler)
         {
@@ -298,46 +224,123 @@ bool initCamera(int frame_rate, std::string camera_ip)
         }
 
         pBasler->Open();
+        
+        // Store model name for logging
+        model_name = std::string(pBasler->GetDeviceInfo().GetModelName());
 
         // Enable Auto Exposure (set to Continuous mode)
         CHECK_ARW(pBasler->ExposureAuto)
         std::cout << "[BaslerAdapter::initCamera] Autoexposure enabled in continuous mode." << std::endl;
         pBasler->ExposureAuto.SetValue(Basler_UniversalCameraParams::ExposureAuto_Continuous);
         
-        CHECK_ARW(pBasler->AutoTargetValue)
-        pBasler->AutoTargetValue.SetValue(70);
-        std::cout << "[BaslerAdapter::initCamera] Current autoexposure set to target value: " << pBasler->AutoTargetValue.GetValue() << std::endl;
+        // Try to configure auto exposure target value (optional - not all cameras have this)
+        TRY_CONFIG(pBasler->AutoTargetValue) {
+            pBasler->AutoTargetValue.SetValue(70);
+            std::cout << "[BaslerAdapter::initCamera] Autoexposure target value set to: " << pBasler->AutoTargetValue.GetValue() << std::endl;
+        }
         
-        CHECK_ARW(pBasler->BalanceWhiteAuto)
-        std::cout << "[BaslerAdapter::initCamera] Auto Balance White enabled in continuous mode." << std::endl;
-        pBasler->BalanceWhiteAuto.SetValue(Basler_UniversalCameraParams::BalanceWhiteAuto_Continuous);
+        // Try to configure auto balance white (optional)
+        TRY_CONFIG(pBasler->BalanceWhiteAuto) {
+            pBasler->BalanceWhiteAuto.SetValue(Basler_UniversalCameraParams::BalanceWhiteAuto_Continuous);
+            std::cout << "[BaslerAdapter::initCamera] Auto Balance White enabled in continuous mode." << std::endl;
+        }
 
         std::cout << "[BaslerAdapter::initCamera] Frame Rate should be handled with loop that calls trigger as no continuous capture is enabled." << std::endl;
         
-        // No PTP in this camera :)
-        bool b = pBasler->GevSupportedIEEE1588.GetValue();
-        std::cout << "[BaslerAdapter::initCamera] Is PTP supported by " << getName() << "? " << (b ? "Yes" : "No") << std::endl;
+        // Check if PTP is supported and enable it automatically
+        try {
+            if (force_disable_ptp) {
+                std::cout << "[BaslerAdapter::initCamera] PTP force disabled by parameter. Will use manual timestamp calibration." << std::endl;
+                ptp_supported = false;
+            } else {
+                // Check if PTP is supported (manual check with proper else handling)
+                if (IsAvailable(pBasler->GevSupportedIEEE1588) && IsReadable(pBasler->GevSupportedIEEE1588))
+                {
+                    ptp_supported = pBasler->GevSupportedIEEE1588.GetValue();
+                    std::cout << "[BaslerAdapter::initCamera] Is PTP supported by " << getName() << "? " << (ptp_supported ? "Yes" : "No") << std::endl;
+                
+                    if (ptp_supported)
+                    {
+                        // Try to enable PTP for automatic synchronization
+                        if (IsAvailable(pBasler->GevIEEE1588) && IsWritable(pBasler->GevIEEE1588))
+                        {
+                            pBasler->GevIEEE1588.SetValue(true);
+                            std::cout << "[BaslerAdapter::initCamera] PTP synchronization ENABLED. Camera will sync with PTP master automatically." << std::endl;
+                            
+                            // Give PTP some time to synchronize
+                            std::cout << "[BaslerAdapter::initCamera] Waiting for PTP synchronization (2 seconds)..." << std::endl;
+                            std::this_thread::sleep_for(std::chrono::seconds(2));
+                        }
+                        else
+                        {
+                            std::cout << "[BaslerAdapter::initCamera] PTP feature not writable. Will use manual timestamp calibration." << std::endl;
+                            ptp_supported = false;
+                        }
+                    }
+                    else
+                    {
+                        std::cout << "[BaslerAdapter::initCamera] PTP not supported by camera. Will use manual timestamp calibration." << std::endl;
+                    }
+                }
+                else
+                {
+                    std::cout << "[BaslerAdapter::initCamera] Could not check PTP support (feature not available). Will use manual timestamp calibration." << std::endl;
+                    ptp_supported = false;
+                }
+            }
+        }
+        catch (...) {
+            std::cout << "[BaslerAdapter::initCamera] Exception checking PTP support. Will use manual timestamp calibration." << std::endl;
+            ptp_supported = false;
+        }
 
         GenApi::CIntegerPtr tsFreqNode(pBasler->GetNodeMap().GetNode("GevTimestampTickFrequency"));
         CHECK_AR(tsFreqNode)
         tick_frequency = tsFreqNode->GetValue();
-        std::cout << "[BaslerAdapter::initCamera] Timestamp Tick Frequency: " << tick_frequency << " ticks/s" << std::endl;
+        std::cout << "[" << getName() << "] Camera model: " << model_name << std::endl;
+        std::cout << "[" << getName() << "] Timestamp Tick Frequency: " << tick_frequency << " ticks/s" << std::endl;
+        std::cout << "[" << getName() << "] PTP support: " << (ptp_supported ? "YES (hardware synchronized)" : "NO (using manual calibration)") << std::endl;
         
         ////////////////////////////////////
         //  Metadata extraction enabling  //
         ////////////////////////////////////
 
-        CHECK_ARW(pBasler->ChunkModeActive);
-        pBasler->ChunkModeActive.SetValue(true);
+        // Try to enable chunk mode for metadata extraction (optional - not all cameras support this)
+        try {
+            if (IsAvailable(pBasler->ChunkModeActive) && IsWritable(pBasler->ChunkModeActive)) {
+                pBasler->ChunkModeActive.SetValue(true);
+                std::cout << "[BaslerAdapter::initCamera] Chunk mode enabled for metadata extraction." << std::endl;
 
-        pBasler->ChunkSelector.SetValue("Framecounter");
-        pBasler->ChunkEnable.SetValue(true);
+                // Try to enable specific chunks if available
+                try {
+                    pBasler->ChunkSelector.SetValue("Framecounter");
+                    pBasler->ChunkEnable.SetValue(true);
+                    std::cout << "[BaslerAdapter::initCamera] - Framecounter chunk enabled." << std::endl;
+                } catch (const Pylon::GenericException &e) {
+                    std::cout << "[BaslerAdapter::initCamera] - Framecounter chunk not available: " << e.GetDescription() << std::endl;
+                }
 
-        pBasler->ChunkSelector.SetValue("ExposureTime");
-        pBasler->ChunkEnable.SetValue(true);
+                try {
+                    pBasler->ChunkSelector.SetValue("ExposureTime");
+                    pBasler->ChunkEnable.SetValue(true);
+                    std::cout << "[BaslerAdapter::initCamera] - ExposureTime chunk enabled." << std::endl;
+                } catch (const Pylon::GenericException &e) {
+                    std::cout << "[BaslerAdapter::initCamera] - ExposureTime chunk not available: " << e.GetDescription() << std::endl;
+                }
 
-        pBasler->ChunkSelector.SetValue("GainAll");
-        pBasler->ChunkEnable.SetValue(true);
+                try {
+                    pBasler->ChunkSelector.SetValue("GainAll");
+                    pBasler->ChunkEnable.SetValue(true);
+                    std::cout << "[BaslerAdapter::initCamera] - GainAll chunk enabled." << std::endl;
+                } catch (const Pylon::GenericException &e) {
+                    std::cout << "[BaslerAdapter::initCamera] - GainAll chunk not available: " << e.GetDescription() << std::endl;
+                }
+            } else {
+                std::cout << "[BaslerAdapter::initCamera] Chunk mode not available on this camera (will extract metadata from direct parameters)." << std::endl;
+            }
+        } catch (const Pylon::GenericException &e) {
+            std::cout << "[BaslerAdapter::initCamera] Could not configure chunk mode: " << e.GetDescription() << " (not critical, continuing)." << std::endl;
+        }
         
         return true;
     }
@@ -366,7 +369,10 @@ bool beginAcquisition()
     }
 
     // Timestamp calibration initialization :)
-    g_calibration = calibrateTimestamps(30);
+    if (!ptp_supported)
+    {
+        g_calibration = calibrateTimestamps(30);
+    }
     return true;
 }
 
@@ -380,13 +386,9 @@ bool endAcquisition()
     {
         std::cout << "[BaslerAdapter::endAcquisition] End acquisition." << std::endl;
         
-        // Mostrar estadísticas finales de calibración
-        if (g_calibration.initialized && g_calibration.samples_count > 0) {
-            std::cout << "[Calibration] Estadísticas finales:" << std::endl;
-            std::cout << "              - Muestras procesadas: " << g_calibration.samples_count << std::endl;
-            std::cout << "              - Offset final: " << g_calibration.offset_ns/1e6 << " ms" << std::endl;
-            std::cout << "              - Error medio: " << g_calibration.getMeanError() << " ms" << std::endl;
-            std::cout << "              - Desv. estándar: " << g_calibration.getStdDevError() << " ms" << std::endl;
+        // Show final calibration statistics
+        if (!ptp_supported && g_calibration.initialized) {
+            g_calibration.printFinalStats();
         }
         
         pBasler->StopGrabbing();
@@ -477,9 +479,7 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
         auto pc_start = std::chrono::system_clock::now();
         
         // Wait for an image and then retrieve it. A timeout of 1000 ms is used.
-        metadata.initTimestamps(); //Stores timetag when requested to avoid communication delay difference between cameras
         pBasler->ExecuteSoftwareTrigger();
-        metadata.triggerAck();
         pBasler->RetrieveResult( 1000, ptrGrabResult, Pylon::TimeoutHandling_ThrowException);
         
         auto pc_end = std::chrono::system_clock::now();
@@ -500,15 +500,19 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
             // Obtener timestamp de la cámara
             auto camera_timestamp_ticks = ptrGrabResult->GetTimeStamp();
             int64_t cam_ns = camera_timestamp_ticks * 1e9 / tick_frequency;
-            
+             
+            metadata.camera_timestamp = cam_ns;
             // Aplicar calibración actual al timestamp de la cámara
-            metadata.camera_timestamp = g_calibration.offset_ns + cam_ns * g_calibration.slope;
+            if (!ptp_supported)
+                metadata.camera_timestamp = g_calibration.offset_ns + cam_ns * g_calibration.slope;
             
             // Actualizar calibración con esta nueva muestra
             // Usar el promedio de pc_start y pc_end para mejor precisión
             int64_t pc_ns = (pc_start.time_since_epoch().count() + 
                            pc_end.time_since_epoch().count()) / 2;
-            g_calibration.updateWithSample(camera_timestamp_ticks, pc_ns, tick_frequency);
+            
+            if (!ptp_supported)                           
+                g_calibration.updateWithSample(camera_timestamp_ticks, pc_ns, tick_frequency);
             
             // std::cout << "[BaslerAdapter::acquireImage] Image acquired with timestamp (ns): " << metadata.camera_timestamp << std::endl;
             
@@ -527,7 +531,7 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
 
             GenApi::INodeMap& chunkDataMap = ptrGrabResult->GetChunkDataNodeMap();
         
-            // Framecounter
+            // Framecounter (try chunk first, fallback to direct read)
             GenApi::CIntegerPtr chunkFrameCounter(chunkDataMap.GetNode("ChunkFramecounter"));
             if (GenApi::IsReadable(chunkFrameCounter))
             {
@@ -535,28 +539,46 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
                 metadata.frameCounter = frameCounter;
             }
         
-            // ExposureTime
+            // ExposureTime (try chunk first, fallback to direct parameter)
+            bool exposure_read = false;
             GenApi::CFloatPtr chunkExposure(chunkDataMap.GetNode("ChunkExposureTime"));
             if (GenApi::IsReadable(chunkExposure))
             {
                 double exposure_us = chunkExposure->GetValue();
                 metadata.setExposure(static_cast<uint64_t>(exposure_us * 1000.0)); // store in nanoseconds
+                exposure_read = true;
+            }
+            
+            // Fallback: read ExposureTime directly from camera parameter
+            if (!exposure_read)
+            {
+                GenApi::CFloatPtr exposureNode(pBasler->GetNodeMap().GetNode("ExposureTime"));
+                if (GenApi::IsReadable(exposureNode))
+                {
+                    double exposure_us = exposureNode->GetValue();
+                    metadata.setExposure(static_cast<uint64_t>(exposure_us * 1000.0)); // store in nanoseconds
+                }
             }
         
-            // GainAll
+            // GainAll (try chunk first, fallback to direct read)
+            bool gain_read = false;
             GenApi::CFloatPtr chunkGain(chunkDataMap.GetNode("ChunkGainAll"));
             if (GenApi::IsReadable(chunkGain))
             {
                 double gain = chunkGain->GetValue();
                 metadata.gain = gain;
+                gain_read = true;
             }
 
-            // Gain
-            GenApi::CFloatPtr gainNode(pBasler->GetNodeMap().GetNode("Gain"));
-            if (GenApi::IsReadable(gainNode))
+            // Fallback: read Gain directly from camera parameter
+            if (!gain_read)
             {
-                double gain = gainNode->GetValue();
-                metadata.gain = gain;
+                GenApi::CFloatPtr gainNode(pBasler->GetNodeMap().GetNode("Gain"));
+                if (GenApi::IsReadable(gainNode))
+                {
+                    double gain = gainNode->GetValue();
+                    metadata.gain = gain;
+                }
             }
         }
         else

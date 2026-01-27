@@ -12,13 +12,19 @@
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 
-#include "utils/logging_utils.h"
-#include "utils/image_metadata.h"
+#include "core/utils/logging_utils.h"
+#include "core/utils/image_metadata.h"
 
 void createTestPattern(cv::Mat& image);
 
+void setNodeName(const std::string& name);
 std::string getName();
+std::string getModelName();
 std::string getType();
+
+// External variables to control PTP behavior (set before initCamera)
+extern bool force_disable_ptp;
+
 bool initCamera(int frame_rate, std::string camera_ip);
 bool beginAcquisition();
 bool endAcquisition();

@@ -7,7 +7,7 @@
 #include <iomanip>
 #include <filesystem>
 
-#include "utils/image_metadata.h"
+#include "core/utils/image_metadata.h"
 
 #include "camera_adapter.h"
 

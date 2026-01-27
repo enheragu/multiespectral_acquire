@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html manifest="{{ url_for('static', filename='manifest.appcache') }}">
 <head>
-    <title>Multiespectral Cámera GUI</title>
+    <title id="page-title">Camera GUI</title>
     <!-- Downloaded bootstrap.min for interface to work without internet connection -->
     <!-- <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"> -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}">
@@ -29,7 +29,7 @@
         .orientation-layout {
             display: none; /* Oculta por defecto */
         }
-        /* LiDAR elements hidden by default */
+        /* LIDAR elements hidden by default */
         .lidar-element {
             display: none;
         }
@@ -70,19 +70,18 @@
 </head>
 <body>
     <div class="container">
-        <h1>Multiespectral Cámera GUI</h1>
+        <h1 id="gui-title">Camera GUI</h1>
         <form id="control-form">
             <div class="form-row">
                 <div class="col">
-                    <button id="startBtn" class="btn btn-success btn-block" type="submit">Start Acquisition</button>
+                    <button id="startBtn" class="btn btn-success btn-block" type="submit">Start Acquisition Storage</button>
                 </div>
                 <div class="col">
-                    <button id="stopBtn" class="btn btn-danger btn-block" type="button">Stop Acquisition</button>
+                    <button id="stopBtn" class="btn btn-danger btn-block" type="button">Stop Acquisition Storage</button>
                 </div>
-                <div class="col d-flex align-items-center justify-content-center"> 
-                    <div class="col form-check">
-                        <input type="checkbox" class="form-check-input" id="storeInDriveCheck" name="store_in_drive">
-                        <label class="form-check-label" for="storeInDriveCheck">Store images</label>
+                <div class="col d-flex align-items-center justify-content-center" style="min-height: 38px;"> 
+                    <div class="w-100 text-center">
+                        <strong>Storage status:</strong> <span id="recordingStatus" class="badge badge-secondary" style="font-size: 1.0em; padding: 0.5em 1em;">IDLE</span>
                     </div>
                 </div>
             </div>
@@ -90,39 +89,33 @@
             <div id="layout-landscape" class="orientation-layout">
                 <div class="form-row">
                     <div class="col">
-                        <label for="frame_rate_lwir_landscape">LWIR (Hz):</label>
+                        <label for="frame_rate_lwir_landscape" class="camera1-hz-label">LWIR (Hz):</label>
                         <input type="text" class="form-control" id="frame_rate_lwir_landscape" name="frame_rate_lwir" readonly>
                     </div>
                     <div class="col">
-                        <label for="total_images_received_lwir_landscape">Num LWIR img:</label>
+                        <label for="total_images_received_lwir_landscape" class="camera1-num-label">LWIR (num img):</label>
                         <input type="text" class="form-control" id="total_images_received_lwir_landscape" name="total_images_received_lwir" readonly>
                     </div>
                 </div>
                 <div class="form-row">
                     <div class="col">
-                        <label for="frame_rate_rgb_landscape">RGB (Hz):</label>
+                        <label for="frame_rate_rgb_landscape" class="camera2-hz-label">RGB (Hz):</label>
                         <input type="text" class="form-control" id="frame_rate_rgb_landscape" name="frame_rate_rgb" readonly>
                     </div>
                     <div class="col">
-                        <label for="total_images_received_rgb_landscape">Num RGB img:</label>
+                        <label for="total_images_received_rgb_landscape" class="camera2-num-label">RGB (num img):</label>
                         <input type="text" class="form-control" id="total_images_received_rgb_landscape" name="total_images_received_rgb" readonly>
                     </div>
                 </div>
-                <!-- LiDAR row - landscape (hidden by default) -->
+                <!-- LIDAR row - landscape (hidden by default) -->
                 <div class="form-row lidar-element" id="lidar-row-landscape">
                     <div class="col">
-                        <label for="frame_rate_lidar_landscape">LiDAR (Hz):</label>
+                        <label for="frame_rate_lidar_landscape" class="lidar-hz-label">LIDAR (Hz):</label>
                         <input type="text" class="form-control" id="frame_rate_lidar_landscape" name="frame_rate_lidar" readonly>
                     </div>
                     <div class="col">
-                        <label for="total_images_received_lidar_landscape">Num LiDAR img:</label>
+                        <label for="total_images_received_lidar_landscape" class="lidar-num-label">LIDAR (num img):</label>
                         <input type="text" class="form-control" id="total_images_received_lidar_landscape" name="total_images_received_lidar" readonly>
-                    </div>
-                </div>
-                <div class="form-row mt-3">
-                    <div class="col">
-                        <label for="store_path_landscape">Image store path:</label>
-                        <input type="text" class="form-control" id="store_path_landscape" name="store_path" readonly>
                     </div>
                 </div>
             </div>
@@ -130,55 +123,63 @@
             <div id="layout-portrait" class="orientation-layout">
                 <div class="form-row">
                     <div class="col">
-                        <label for="frame_rate_lwir_portrait">LWIR (Hz):</label>
+                        <label for="frame_rate_lwir_portrait" class="camera1-hz-label">LWIR (Hz):</label>
                         <input type="text" class="form-control" id="frame_rate_lwir_portrait" name="frame_rate_lwir" readonly>
                     </div>
                     <div class="col">
-                        <label for="frame_rate_rgb_portrait">RGB (Hz):</label>
+                        <label for="frame_rate_rgb_portrait" class="camera2-hz-label">RGB (Hz):</label>
                         <input type="text" class="form-control" id="frame_rate_rgb_portrait" name="frame_rate_rgb" readonly>
                     </div>
-                    <!-- LiDAR column - portrait (hidden by default) -->
+                    <!-- LIDAR column - portrait (hidden by default) -->
                     <div class="col lidar-element" id="lidar-col-portrait-hz">
-                        <label for="frame_rate_lidar_portrait">LiDAR (Hz):</label>
+                        <label for="frame_rate_lidar_portrait" class="lidar-hz-label">LIDAR (Hz):</label>
                         <input type="text" class="form-control" id="frame_rate_lidar_portrait" name="frame_rate_lidar" readonly>
                     </div>
                 </div>
                 <div class="form-row">
                     <div class="col">
-                        <label for="total_images_received_lwir_portrait">Num LWIR img:</label>
+                        <label for="total_images_received_lwir_portrait" class="camera1-num-label">LWIR (num img):</label>
                         <input type="text" class="form-control" id="total_images_received_lwir_portrait" name="total_images_received_lwir" readonly>
                     </div>
                     <div class="col">
-                        <label for="total_images_received_rgb_portrait">Num RGB img:</label>
+                        <label for="total_images_received_rgb_portrait" class="camera2-num-label">RGB (num img):</label>
                         <input type="text" class="form-control" id="total_images_received_rgb_portrait" name="total_images_received_rgb" readonly>
                     </div>
-                    <!-- LiDAR column - portrait (hidden by default) -->
+                    <!-- LIDAR column - portrait (hidden by default) -->
                     <div class="col lidar-element" id="lidar-col-portrait-num">
-                        <label for="total_images_received_lidar_portrait">Num LiDAR img:</label>
+                        <label for="total_images_received_lidar_portrait" class="lidar-num-label">LIDAR (num img):</label>
                         <input type="text" class="form-control" id="total_images_received_lidar_portrait" name="total_images_received_lidar" readonly>
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="col">
-                        <label for="store_path_portrait">Image store path:</label>
-                        <input type="text" class="form-control" id="store_path_portrait" name="store_path" readonly>
                     </div>
                 </div>
             </div>
         </form>
         <div id="images-container">
             <div class="image-box">
-                <h3>LWIR Img</h3>
+                <h3 id="camera1-img-title">LWIR Img</h3>
                 <img src="" id="lwir_image" class="img-fluid">
             </div>
             <div class="image-box">
-                <h3>RGB Img</h3>
+                <h3 id="camera2-img-title">RGB Img</h3>
                 <img src="" id="rgb_image" class="img-fluid">
             </div>
-            <!-- LiDAR image box (hidden by default) -->
+            <!-- LIDAR image box (hidden by default) -->
             <div class="image-box lidar-element" id="lidar-image-box">
-                <h3>SWIR Img</h3>
+                <h3 id="lidar-img-title">LIDAR Img</h3>
                 <img src="" id="lidar_image" class="img-fluid">
+            </div>
+        </div>
+        
+        <!-- LIDAR Topic Selector (always visible, at the bottom) -->
+        <div id="lidar-topic-selector">
+            <hr>
+            <div class="form-group">
+                <label for="lidar_topic_select"><strong>LIDAR Image Source:</strong></label>
+                <select class="form-control" id="lidar_topic_select">
+                    <option value="/Multiespectral/ouster/range_image_cropped_sync">Range Image</option>
+                    <option value="/Multiespectral/ouster/reflec_image_cropped_sync" selected>Reflectivity Image</option>
+                    <option value="/Multiespectral/ouster/signal_image_cropped_sync">Signal Image</option>
+                    <option value="/Multiespectral/ouster/nearir_image_cropped_sync">Near-IR Image</option>
+                </select>
             </div>
         </div>
     </div>
@@ -234,30 +235,92 @@
             sendImageSize();
 
             socket.on('update_data', function(data) {
-                // Update LiDAR visibility based on server data
+                // Update GUI title if provided
+                if (data.gui_title) {
+                    $('#gui-title').text(data.gui_title);
+                    $('#page-title').text(data.gui_title);
+                }
+                
+                // Update display names if provided
+                if (data.camera1_name) {
+                    // Update image title
+                    $('#camera1-img-title').text(data.camera1_name + ' Img');
+                    // Update Hz labels
+                    $('.camera1-hz-label').text(data.camera1_name + ' (Hz):');
+                    // Update image count labels
+                    $('.camera1-num-label').text(data.camera1_name + ' (Num img):');
+                }
+                if (data.camera2_name) {
+                    // Update image title
+                    $('#camera2-img-title').text(data.camera2_name + ' Img');
+                    // Update Hz labels
+                    $('.camera2-hz-label').text(data.camera2_name + ' (Hz):');
+                    // Update image count labels
+                    $('.camera2-num-label').text(data.camera2_name + ' (Num img):');
+                }
+                if (data.lidar_name) {
+                    // Update image title
+                    $('#lidar-img-title').text(data.lidar_name + ' Image');
+                    // Update Hz labels
+                    $('.lidar-hz-label').text(data.lidar_name + ' (Hz):');
+                    // Update image count labels
+                    $('.lidar-num-label').text(data.lidar_name + ' (Num img):');
+                }
+                
+                // Update LIDAR visibility based on server data
                 updateLidarVisibility(data.lidar_available || false);
                 
-                // Actualizar datos de layout-landscape
-                $('#frame_rate_lwir_landscape').val(data.frame_rate_lwir);
-                $('#total_images_received_lwir_landscape').val(data.total_images_received_lwir);
-                $('#lwir_img_storepath_landscape').val(data.lwir_img_storepath);
+                // Update recording status badge with detailed states
+                var statusBadge = $('#recordingStatus');
+                var status = data.recording_status || 'IDLE';
                 
-                $('#frame_rate_rgb_landscape').val(data.frame_rate_rgb);
-                $('#total_images_received_rgb_landscape').val(data.total_images_received_rgb);
-                $('#rgb_img_storepath_landscape').val(data.rgb_img_storepath);
-                $('#store_path_landscape').val(data.storage_path);
+                statusBadge.removeClass('badge-secondary badge-success badge-warning badge-danger badge-info');
+                
+                switch(status) {
+                    case 'RECORDING':
+                        statusBadge.addClass('badge-success');
+                        statusBadge.text('RECORDING');
+                        break;
+                    case 'RECORDING REQUESTED':
+                        statusBadge.addClass('badge-warning');
+                        statusBadge.text('RECORDING REQUESTED');
+                        break;
+                    case 'STOP REQUESTED':
+                        statusBadge.addClass('badge-info');
+                        statusBadge.text('STOP REQUESTED');
+                        break;
+                    case 'IDLE':
+                    default:
+                        statusBadge.addClass('badge-secondary');
+                        statusBadge.text('IDLE');
+                        break;
+                }
+                
+                // Support both old naming (lwir/rgb) and new generic naming (camera1/camera2)
+                var frameRate1 = data.frame_rate_camera1 || data.frame_rate_lwir || '';
+                var frameRate2 = data.frame_rate_camera2 || data.frame_rate_rgb || '';
+                var totalImg1 = data.total_images_received_camera1 || data.total_images_received_lwir || '';
+                var totalImg2 = data.total_images_received_camera2 || data.total_images_received_rgb || '';
+                var imgPath1 = data.camera1_img_path || data.lwir_img_path || '';
+                var imgPath2 = data.camera2_img_path || data.rgb_img_path || '';
+                
+                // Actualizar datos de layout-landscape
+                $('#frame_rate_camera1_landscape, #frame_rate_lwir_landscape').val(frameRate1);
+                $('#total_images_received_camera1_landscape, #total_images_received_lwir_landscape').val(totalImg1);
+                
+                $('#frame_rate_camera2_landscape, #frame_rate_rgb_landscape').val(frameRate2);
+                $('#total_images_received_camera2_landscape, #total_images_received_rgb_landscape').val(totalImg2);
 
                 // Actualizar datos de layout-portrait
-                $('#frame_rate_lwir_portrait').val(data.frame_rate_lwir);
-                $('#frame_rate_rgb_portrait').val(data.frame_rate_rgb);
-                $('#total_images_received_lwir_portrait').val(data.total_images_received_lwir);
-                $('#total_images_received_rgb_portrait').val(data.total_images_received_rgb);
-                $('#store_path_portrait').val(data.storage_path);
+                $('#frame_rate_camera1_portrait, #frame_rate_lwir_portrait').val(frameRate1);
+                $('#frame_rate_camera2_portrait, #frame_rate_rgb_portrait').val(frameRate2);
+                $('#total_images_received_camera1_portrait, #total_images_received_lwir_portrait').val(totalImg1);
+                $('#total_images_received_camera2_portrait, #total_images_received_rgb_portrait').val(totalImg2);
                 
-                $('#lwir_image').attr('src', 'data:image/jpeg;base64,' + data.lwir_img_path);
-                $('#rgb_image').attr('src', 'data:image/jpeg;base64,' + data.rgb_img_path);
+                $('#camera1_image, #lwir_image').attr('src', 'data:image/jpeg;base64,' + imgPath1);
+                $('#camera2_image, #rgb_image').attr('src', 'data:image/jpeg;base64,' + imgPath2);
                 
-                // LiDAR data (only if available)
+                // LIDAR data (only if available)
                 if (data.lidar_available) {
                     $('#frame_rate_lidar_landscape').val(data.frame_rate_lidar);
                     $('#total_images_received_lidar_landscape').val(data.total_images_received_lidar);
@@ -285,6 +348,23 @@
 
             // Ejecutar una vez al cargar la página
             window.dispatchEvent(new Event('orientationchange'));
+
+            // Handle LIDAR topic selection change
+            $('#lidar_topic_select').change(function() {
+                console.log('='.repeat(80));
+                console.log('[GUI] ============ DROPDOWN CHANGED ============');
+                var selectedTopic = $(this).val();
+                console.log('[GUI] Selected topic:', selectedTopic);
+                console.log('[GUI] Emitting change_lidar_topic to server...');
+                
+                socket.emit('change_lidar_topic', { topic: selectedTopic });
+                
+                console.log('[GUI] Event emitted successfully');
+                console.log('='.repeat(80));
+                
+                // Visual confirmation
+                alert('Topic changed to: ' + selectedTopic);
+            });
 
         });
     </script>

@@ -4,18 +4,38 @@
 
 
 #include "camera_adapter.h"
-#include "utils/image_metadata.h"
+#include "core/utils/image_metadata.h"
 
+// Global variable to control PTP behavior (set by camera_handler_node)
+bool force_disable_ptp = false;
 
 bool aquisition_status = false;
 int frame_id = 0;
+std::string camera_name = "Default:Dummy";  // Display name (usually ROS node name)
+std::string model_name = "DummyCamera";  // Camera model name
 
 /**
- * @brief Get name of the camera for logging purposes
+ * @brief Set the display name for the camera (typically the ROS node name)
+ */
+void setNodeName(const std::string& name)
+{
+    camera_name = name;
+}
+
+/**
+ * @brief Get name of the camera for logging purposes (returns node name if set, model otherwise)
  */
 std::string getName()
 {
-    return "Dummy Campera";
+    return camera_name;
+}
+
+/**
+ * @brief Get the camera model name
+ */
+std::string getModelName()
+{
+    return model_name;
 }
 
 /**
@@ -113,7 +133,11 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
     /****************************
     **   Set dummy metadata    **
     *****************************/
-    metadata.initTimestamps();
+    // Set timestamps
+    auto now = std::chrono::system_clock::now();
+    auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+    metadata.camera_timestamp = static_cast<uint64_t>(nanos);
+    
     metadata.frameCounter = frame_id++;
     metadata.width = 640;
     metadata.height = 480;

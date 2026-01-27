@@ -7,11 +7,6 @@
 #include <functional>
 #include <yaml-cpp/yaml.h>
 
-enum TimeStampSource {
-    USE_INTERNAL_CAMERA,
-    USE_COMPUTED_TRIGGER
-};
-
 struct GNSSMetadata {
     float latitude;
     float longitude;
@@ -57,32 +52,23 @@ struct OdomMetadata {
 };
 
 class ImageMetadata {
-    TimeStampSource timestamp_source_config = TimeStampSource::USE_INTERNAL_CAMERA;
-
 public:
     using ROSTimeNowCallback = std::function<uint64_t()>;
 
     ImageMetadata();
 
     void setROSTimeNowCallback(ROSTimeNowCallback cb);
-    void initTimestamps();
-    void triggerAck();
     void setExposure(uint64_t exposure_ns);
     uint64_t getSyncTimestamp() const;
     void saveYaml(const std::string& filename) const;
-    void setTimestampSource(TimeStampSource source);
     void addGNSSData(GNSSMetadata gnss) { gnss_data = gnss; }
     void addOdomData(OdomMetadata odom) { odom_data = odom; }
 
 public:
     ROSTimeNowCallback ros_time_now_cb_;
-    uint64_t camera_timestamp;        // all in nanoseconds for compatibility
-    uint64_t ros_timestamp;           // all in nanoseconds for compatibility
-    uint64_t trigger_timestamp;      // all in nanoseconds for compatibility
-    uint64_t trigger_sent_timestamp;   // all in nanoseconds for compatibility
-    uint64_t trigger_ack_timestamp;    // all in nanoseconds for compatibility
-    uint64_t exposureTime;            // all in nanoseconds for compatibility
-    uint64_t half_exposure_timestamp; // nanoseconds (estimated)
+    uint64_t camera_timestamp;        // Hardware timestamp (PTP or calibrated), nanoseconds
+    uint64_t exposureTime;            // Exposure duration, nanoseconds
+    uint64_t half_exposure_timestamp; // camera_timestamp + exposure/2 (sync point), nanoseconds
     uint64_t frameCounter;
     double gain;
     int width;
@@ -110,9 +96,7 @@ inline void fillCommonMetadata(ImageMetadata& meta,
                                uint32_t seq, 
                                const std::string& dataset_name,
                                int frame_rate) {
-    meta.ros_timestamp = timestamp_ns;
     meta.camera_timestamp = timestamp_ns;
-    meta.trigger_timestamp = timestamp_ns;
     meta.dataset_name = dataset_name;
     meta.frameCounter = seq;
     

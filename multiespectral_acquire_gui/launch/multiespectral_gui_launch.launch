@@ -1,5 +1,27 @@
 <launch>
+  <!-- GUI configuration -->
+  <arg name="gui_title" default="Multiespectral Camera GUI" />
+  
+  <!-- Camera configuration parameters -->
+  <arg name="camera1_topic" default="/Multiespectral/lwir_camera/image_with_metadata_sync" />
+  <arg name="camera1_name" default="LWIR Camera" />
+  
+  <arg name="camera2_topic" default="/Multiespectral/visible_camera/image_with_metadata_sync" />
+  <arg name="camera2_name" default="Visible Camera" />
+  
+  <!-- LIDAR configuration (fixed for now) -->
+  <arg name="lidar_topic" default="/Multiespectral/ouster/reflec_image_cropped_sync" />
+  <arg name="lidar_name" default="LIDAR Image" />
+  
   <group ns="Multiespectral">
-    <node pkg="multiespectral_acquire_gui" type="multiespectral_control.py" name="multiespectral_acquire_gui" output="screen"/>
+    <node pkg="multiespectral_acquire_gui" type="multiespectral_control.py" name="multiespectral_acquire_gui" output="screen">
+      <param name="gui_title" value="$(arg gui_title)" />
+      <param name="camera1_topic" value="$(arg camera1_topic)" />
+      <param name="camera1_name" value="$(arg camera1_name)" />
+      <param name="camera2_topic" value="$(arg camera2_topic)" />
+      <param name="camera2_name" value="$(arg camera2_name)" />
+      <param name="lidar_topic" value="$(arg lidar_topic)" />
+      <param name="lidar_name" value="$(arg lidar_name)" />
+    </node>
   </group>
 </launch>

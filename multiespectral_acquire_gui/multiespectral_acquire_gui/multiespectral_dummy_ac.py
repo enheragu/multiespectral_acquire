@@ -5,6 +5,7 @@ import cv2
 import base64
 import time
 import os
+import threading
 
 from multiespectral_acquire_gui.FreqCounter import FreqCounter
 
@@ -14,11 +15,7 @@ frame_rate_lidar = FreqCounter()
 lwir_img_path = ""
 rgb_img_path = ""
 lidar_img_path = ""
-lwir_img_storepath = ""
-rgb_img_storepath = ""
-lidar_img_storepath = ""
-store_in_drive = False
-camera_handler = None
+recording_enabled = False
 lidar_available = False  # Can be set based on presence of dummy lidar images
 
 
@@ -28,6 +25,7 @@ class DummyMultiespectralAcquire:
         global lidar_available
         self.running = False
         self.socketio = socketio
+        self._recording_enabled = False
         
         # Check if lidar dummy images exist
         script_path = os.path.dirname(os.path.abspath(__file__))
@@ -37,31 +35,46 @@ class DummyMultiespectralAcquire:
             print(f"[MultiespectralAcquireGui] LiDAR dummy images found at {lidar_path}")
         else:
             print(f"[MultiespectralAcquireGui] No LiDAR dummy images found. LiDAR display disabled.")
-
-    def sendGoal(self, store):
-        print(f"[MultiespectralAcquireGui] Send goal with flag as: {store =}")
         
-        frame_rate_lwir.start()
-        frame_rate_rgb.start()
-        if lidar_available:
-            frame_rate_lidar.start()
+        # Start dummy image loop thread
+        self.update_thread = threading.Thread(target=self.execute, daemon=True)
+        self.update_thread.start()
 
-        self.execute()
+    def set_recording(self, enabled: bool):
+        """Enable/disable recording (dummy just updates flag)"""
+        global recording_enabled
+        self._recording_enabled = enabled
+        recording_enabled = enabled
+        print(f'[DummyMultiespectralAcquire] Recording {"ENABLED" if enabled else "DISABLED"}')
+        
+        if enabled:
+            frame_rate_lwir.start()
+            frame_rate_rgb.start()
+            if lidar_available:
+                frame_rate_lidar.start()
+        else:
+            frame_rate_lwir.stop()
+            frame_rate_rgb.stop()
+            if lidar_available:
+                frame_rate_lidar.stop()
+        
+        return True
 
-    def cancelGoal(self):
-        pass
+    def toggle_recording(self):
+        """Toggle recording state"""
+        return self.set_recording(not self._recording_enabled)
 
-    def imgCB(self):
-        pass
+    def enable_recording(self):
+        """Start recording"""
+        return self.set_recording(True)
 
-    def doneCb(self):
-        pass
-
-    def activeCb(self):
-        pass
-
-    def feedbackCB(self):
-        pass
+    def disable_recording(self):
+        """Stop recording"""
+        return self.set_recording(False)
+    
+    def stop(self):
+        """Stop the dummy handler"""
+        self.running = False
 
     def execute(self):
         self.running = True
@@ -83,20 +96,27 @@ class DummyMultiespectralAcquire:
         lidar_cycle = cycle(archivos_lidar) if archivos_lidar else None
         
         print(f"[MultiespectralAcquireGui] Start image posting iteration")
-        for archivo1, archivo2 in zip(archivos_dir1, archivos_dir2):
-            path1 = os.path.join(lwir_path, archivo1)
-            path2 = os.path.join(rgb_path, archivo2)
+        while self.running:
+            for archivo1, archivo2 in zip(archivos_dir1, archivos_dir2):
+                if not self.running:
+                    break
+                    
+                # Only show images when recording is enabled
+                if not self._recording_enabled:
+                    time.sleep(0.1)
+                    continue
+                    
+                path1 = os.path.join(lwir_path, archivo1)
+                path2 = os.path.join(rgb_path, archivo2)
 
-            lwir_image = cv2.imread(path1)
-            rgb_image = cv2.imread(path2)
+                lwir_image = cv2.imread(path1)
+                rgb_image = cv2.imread(path2)
 
-            _, lwir_buffer = cv2.imencode('.jpg', lwir_image)
-            lwir_img_path = base64.b64encode(lwir_buffer).decode('utf-8')
-            lwir_img_storepath = str(lwir_path)
+                _, lwir_buffer = cv2.imencode('.jpg', lwir_image)
+                lwir_img_path = base64.b64encode(lwir_buffer).decode('utf-8')
 
-            _, rgb_buffer = cv2.imencode('.jpg', rgb_image)
-            rgb_img_path = base64.b64encode(rgb_buffer).decode('utf-8')
-            rgb_img_storepath = str(rgb_path)
+                _, rgb_buffer = cv2.imencode('.jpg', rgb_image)
+                rgb_img_path = base64.b64encode(rgb_buffer).decode('utf-8')
             
             frame_rate_lwir.tick()
             frame_rate_rgb.tick()
@@ -107,10 +127,9 @@ class DummyMultiespectralAcquire:
                 'total_images_received_rgb': frame_rate_rgb.countItems(),
                 'lwir_img_path': lwir_img_path,
                 'rgb_img_path': rgb_img_path,
-                'lwir_img_storepath': lwir_img_storepath,
-                'rgb_img_storepath': rgb_img_storepath,
                 'frame_rate_lwir': str(frame_rate_lwir),
                 'frame_rate_rgb': str(frame_rate_rgb),
+                'recording_enabled': self._recording_enabled,
                 'lidar_available': lidar_available,
             }
             
@@ -122,30 +141,14 @@ class DummyMultiespectralAcquire:
                 if lidar_image is not None:
                     _, lidar_buffer = cv2.imencode('.jpg', lidar_image)
                     lidar_img_path = base64.b64encode(lidar_buffer).decode('utf-8')
-                    lidar_img_storepath = str(lidar_path)
                     frame_rate_lidar.tick()
                     
                     data['total_images_received_lidar'] = frame_rate_lidar.countItems()
                     data['lidar_img_path'] = lidar_img_path
-                    data['lidar_img_storepath'] = lidar_img_storepath
                     data['frame_rate_lidar'] = str(frame_rate_lidar)
             
             self.socketio.emit('update_data', data)
 
-            print(f"Total received lwir: {frame_rate_lwir.countItems()}")
-            print(f"Total received rgb: {frame_rate_rgb.countItems()}")
-            if lidar_available:
-                print(f"Total received lidar: {frame_rate_lidar.countItems()}")
-            print(f"{lwir_img_storepath = }")
-            print(f"{rgb_img_storepath = }")
-
             if not self.running:
                 break
-            time.sleep(0.15)
-
-    def stop(self):
-        self.running = False
-        frame_rate_lwir.stop()
-        frame_rate_rgb.stop()
-        frame_rate_lidar.stop()
-        print("[MultiespectralAcquireGui] Finished image acquisition")
+            time.sleep(0.5)

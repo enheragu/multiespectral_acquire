@@ -1,0 +1,36 @@
+<launch>
+    <arg name="session_folder" default="test_session"/>
+    <arg name="dataset_output_path" default="/media/administrator/data/images_eeha"/>
+    <arg name="output_path" default="$(arg dataset_output_path)/pr_$(arg session_folder)"/>
+
+    <arg name="output_frame_rate" default="1"/>
+    <arg name="slave_fisheye_frame_rate" default="5"/>
+    
+
+  	<!-- <include file = "$(find camera_aravis)/launch/camera_aravis.launch"/> -->
+	<group ns="Fisheye">
+        <!-- Camera handlers -->
+        <node pkg="multiespectral_acquire" type="basler_camera_handler" name="frontal_camera" output="screen">
+            <param name="camera_ip" value="$(env FRONTAL_FISHEYE_IP)"/>
+            <param name="image_topic" value="frontal_camera"/>
+            <param name="frame_rate" value="$(arg output_frame_rate)"/>  
+            <param name="use_ptp" value="false"/>
+        </node>
+
+        <node pkg="multiespectral_acquire" type="basler_camera_handler" name="rear_camera" output="screen">
+            <param name="camera_ip" value="$(env REAR_FISHEYE_IP)"/>
+            <param name="image_topic" value="rear_camera"/>
+            <param name="frame_rate" value="$(arg slave_fisheye_frame_rate)"/>  
+            <param name="use_ptp" value="false"/>
+        </node>
+        
+        <!-- Buffer handlers for synchronization and storage -->
+        <include file="$(find multiespectral_acquire)/launch/fisheye_buffer_handlers.launch">
+            <arg name="output_path" value="$(arg output_path)"/>
+            <arg name="master_topic" value="frontal_camera/image_with_metadata"/>
+        </include>
+
+    </group>
+</launch>
+
+

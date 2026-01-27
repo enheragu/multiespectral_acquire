@@ -27,7 +27,6 @@ app = Flask(__name__,
 # socketio = SocketIO(app, cors_allowed_origins="*") # Allow multiple connections from different origins
 socketio = SocketIO(app, async_mode='threading')
 
-store_in_drive = False
 camera_handler = None
 
 @app.route('/')
@@ -38,27 +37,31 @@ def home():
                            total_images_received_rgb=0,
                            lwir_img_path="", 
                            rgb_img_path="",
-                           lwir_img_storepath="", 
-                           rgb_img_storepath="",
-                           store_in_drive=False)
+                           recording_enabled=False)
 
 @app.route('/start', methods=['POST'])
-def start_camera():
-    global camera_handler, store_in_drive
+def start_recording():
+    global camera_handler
     if camera_handler is None:
         return jsonify({"status": "not_initialized"})
     
-    store_in_drive = 'store_in_drive' in request.form
-    camera_handler.sendGoal(store_in_drive)
-    return jsonify({"status": "started"})
+    camera_handler.enable_recording()
+    return jsonify({"status": "recording_enabled"})
 
 
 @app.route('/stop', methods=['POST'])
-def stop_camera():
+def stop_recording():
     global camera_handler
     if camera_handler:
-        camera_handler.cancelGoal()
-    return jsonify({"status": "stopped"})
+        camera_handler.disable_recording()
+    return jsonify({"status": "recording_disabled"})
+
+@app.route('/toggle', methods=['POST'])
+def toggle_recording():
+    global camera_handler
+    if camera_handler:
+        camera_handler.toggle_recording()
+    return jsonify({"status": "toggled"})
 
 @app.route('/manifest')
 def manifest():

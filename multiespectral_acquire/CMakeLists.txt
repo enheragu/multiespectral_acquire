@@ -11,33 +11,28 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   image_transport
   camera_info_manager
-  actionlib
-  actionlib_msgs
   message_generation
 )
-find_package(Qt5 REQUIRED COMPONENTS Widgets) # rviz plugin for cameras :)
 
+find_package(Qt5 REQUIRED COMPONENTS Widgets) # rviz plugin for cameras :)
 find_package(OpenCV REQUIRED)
 find_package(pylon REQUIRED)
-find_package(Spinnaker REQUIRED) # Makes use of FindSpinnaker.cmake in cmake fodler
-
+find_package(Spinnaker REQUIRED) # Makes use of FindSpinnaker.cmake in cmake folder
 find_package(yaml-cpp REQUIRED)
 
-
-add_action_files(
-  DIRECTORY action
-  FILES MultiespectralAcquisition.action
-)
-add_service_files(
-  DIRECTORY srv
-  FILES ImageRequest.srv
+add_message_files(
+  DIRECTORY msg
+  FILES 
+    ImageMetadata.msg
+    ImageWithMetadata.msg
+    TriggerStamp.msg
 )
 generate_messages(
-  DEPENDENCIES std_msgs sensor_msgs actionlib_msgs
+  DEPENDENCIES std_msgs sensor_msgs
 )
 
 catkin_package(
-  CATKIN_DEPENDS roscpp sensor_msgs nav_msgs std_msgs cv_bridge image_transport camera_info_manager actionlib actionlib_msgs message_runtime
+  CATKIN_DEPENDS roscpp sensor_msgs std_msgs cv_bridge image_transport camera_info_manager message_runtime
 )
 
 include_directories(
@@ -51,56 +46,49 @@ include_directories(
   # ${CMAKE_CURRENT_LIST_DIR}/a2A2600_20gcBAS_pylon_gen
   ${CMAKE_CURRENT_LIST_DIR}/python_gui
   ${YAML_CPP_INCLUDE_DIR}
-  src  # For lidar_drivers/ and utils/ headers
+  src  # For core/ and ros_utils/ headers
 )
 
 # Utils and core sources
 set(MULTISPECTRAL_UTILS
-  src/utils/image_metadata.cpp
-  src/utils/logging_utils.h
+  src/core/utils/image_metadata.cpp
+  src/core/utils/logging_utils.h
 )
 set(CAMERA_CORE
-  src/camera_drivers/camera_adapter.cpp
-  src/camera_adapter_ros.cpp
+  src/core/camera_drivers/camera_adapter.cpp
 )
 
-# Executables (dummy, flir, basler)
-add_executable(dummy_master src/multiespectral_fb_node_master.cpp src/camera_drivers/dummy_adapter.cpp ${CAMERA_CORE} ${MULTISPECTRAL_UTILS})
-add_executable(dummy_slave src/multiespectral_fb_node_slave.cpp src/camera_drivers/dummy_adapter.cpp ${CAMERA_CORE} ${MULTISPECTRAL_UTILS})
-add_executable(dummy_driver src/multiespectral_fb_node_driver.cpp src/camera_drivers/dummy_adapter.cpp ${CAMERA_CORE} ${MULTISPECTRAL_UTILS})
+# New simplified camera handler nodes
+add_executable(basler_camera_handler src/camera_handler_node.cpp src/core/camera_drivers/basler_adapter.cpp ${CAMERA_CORE} ${MULTISPECTRAL_UTILS})
+add_executable(flir_camera_handler src/camera_handler_node.cpp src/core/camera_drivers/flir_adapter.cpp ${CAMERA_CORE} ${MULTISPECTRAL_UTILS})
+add_executable(dummy_camera_handler src/camera_handler_node.cpp src/core/camera_drivers/dummy_adapter.cpp ${CAMERA_CORE} ${MULTISPECTRAL_UTILS})
+add_executable(pointcloud_crop_node src/pointcloud_crop_node.cpp ${MULTISPECTRAL_UTILS})
+add_executable(image_crop_node src/image_crop_node.cpp ${MULTISPECTRAL_UTILS})
 
-add_executable(flir_master src/multiespectral_fb_node_master.cpp src/camera_drivers/flir_adapter.cpp ${CAMERA_CORE} ${MULTISPECTRAL_UTILS})
-add_executable(flir_slave src/multiespectral_fb_node_slave.cpp src/camera_drivers/flir_adapter.cpp ${CAMERA_CORE} ${MULTISPECTRAL_UTILS})
-add_executable(flir_driver src/multiespectral_fb_node_driver.cpp src/camera_drivers/flir_adapter.cpp ${CAMERA_CORE} ${MULTISPECTRAL_UTILS})
+# Link libraries for new nodes
+target_link_libraries(basler_camera_handler ${catkin_LIBRARIES} ${OpenCV_LIBS} pylon::pylon yaml-cpp)
+add_dependencies(basler_camera_handler ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
-add_executable(basler_master src/multiespectral_fb_node_master.cpp src/camera_drivers/basler_adapter.cpp ${CAMERA_CORE} ${MULTISPECTRAL_UTILS})
-add_executable(basler_slave src/multiespectral_fb_node_slave.cpp src/camera_drivers/basler_adapter.cpp ${CAMERA_CORE} ${MULTISPECTRAL_UTILS})
-add_executable(basler_driver src/multiespectral_fb_node_driver.cpp src/camera_drivers/basler_adapter.cpp ${CAMERA_CORE} ${MULTISPECTRAL_UTILS})
+target_link_libraries(flir_camera_handler ${catkin_LIBRARIES} ${OpenCV_LIBS} pthread dl Spinnaker::Spinnaker yaml-cpp)
+add_dependencies(flir_camera_handler ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
-add_executable(lidar_slave src/lidar_fb_node_slave.cpp ${LIDAR_UTILS} ${MULTISPECTRAL_UTILS})
+target_link_libraries(dummy_camera_handler ${catkin_LIBRARIES} ${OpenCV_LIBS} yaml-cpp)
+add_dependencies(dummy_camera_handler ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
+target_link_libraries(pointcloud_crop_node ${catkin_LIBRARIES} ${OpenCV_LIBS} yaml-cpp)
+add_dependencies(pointcloud_crop_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
-# Link libraries
-foreach(target basler_master basler_slave basler_driver)
-  target_link_libraries(${target} ${catkin_LIBRARIES} ${OpenCV_LIBS} pylon::pylon yaml-cpp)
-  add_dependencies(${target} ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-endforeach()
+target_link_libraries(image_crop_node ${catkin_LIBRARIES} ${OpenCV_LIBS} yaml-cpp)
+add_dependencies(image_crop_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
-foreach(target flir_master flir_slave flir_driver)
-target_link_libraries(${target} ${catkin_LIBRARIES} ${OpenCV_LIBS} pthread dl Spinnaker::Spinnaker yaml-cpp)
-  add_dependencies(${target} ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-endforeach()
-
-foreach(target dummy_master dummy_slave dummy_driver lidar_slave)
-  target_link_libraries(${target} ${catkin_LIBRARIES} yaml-cpp ${OpenCV_LIBS})
-  add_dependencies(${target} ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-endforeach()
+# Install Python scripts
+catkin_install_python(PROGRAMS
+  scripts/buffer_handler_node.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
 
 install(TARGETS
-  dummy_master dummy_slave dummy_driver
-  flir_master flir_slave flir_driver
-  basler_master basler_slave basler_driver
-  lidar_slave
+  basler_camera_handler flir_camera_handler dummy_camera_handler pointcloud_crop_node image_crop_node
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 install(DIRECTORY include/
