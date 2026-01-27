@@ -62,6 +62,14 @@ public:
             metadata.setROSTimeNowCallback([]() { return static_cast<uint64_t>(ros::Time::now().toNSec()); });
             logger_->debug_stream() << "[MAMaster::executeCB] Grabbing image.";
             result = this->grabPublishImage(curr_image, metadata);
+            
+            uint64_t timestamp = metadata.getSyncTimestamp();
+            auto gnss_ptr = gnss_data_buffer_.findClosest(timestamp);
+            if (gnss_ptr) { metadata.addGNSSData(gnss_ptr->gnss_data); }
+
+            auto odom_ptr = odom_data_buffer_.findClosest(timestamp);
+            if (odom_ptr) { metadata.addOdomData(odom_ptr->odom_data); }
+
             if(result && goal->store)
             {
                 logger_->debug_stream() << "[MAMaster::executeCB] Storing image.";
@@ -75,7 +83,7 @@ public:
             }
             // Petición al slave
             multiespectral_acquire::ImageRequest srv;
-            srv.request.timestamp = metadata.getSyncTimestamp();
+            srv.request.timestamp = timestamp;
             srv.request.store = goal->store;
             srv.request.reference_pair = metadata.img_name;
             if (!slave_camera_client_.call(srv)) {

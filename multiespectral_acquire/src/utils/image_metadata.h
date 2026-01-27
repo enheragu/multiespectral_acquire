@@ -1,10 +1,64 @@
 #ifndef IMAGE_METADATA_H
 #define IMAGE_METADATA_H
+
 #include <string>
+#include <iomanip>
 #include <chrono>
 #include <functional>
+#include <yaml-cpp/yaml.h>
+
+enum TimeStampSource {
+    USE_INTERNAL_CAMERA,
+    USE_COMPUTED_TRIGGER
+};
+
+struct GNSSMetadata {
+    float latitude;
+    float longitude;
+    float altitude;
+    std::vector<float> position_covariance;
+    GNSSMetadata() : latitude(0.0), longitude(0.0), altitude(0.0), position_covariance(9, 0.0f) {    }
+    GNSSMetadata(float lat, float lon, float alt, std::vector<float> cov) : 
+            latitude(lat), longitude(lon), altitude(alt), position_covariance(cov) {    }
+    
+    YAML::Node toYAMLNode() const {
+        YAML::Node node;
+        node["latitude"] = latitude;
+        node["longitude"] = longitude;
+        node["altitude"] = altitude;
+        YAML::Node cov_node;
+        for (int i = 0; i < 9; i++) {
+            cov_node.push_back(position_covariance[i]);
+        }
+        node["position_covariance"] = cov_node;
+        return node;
+    }
+};
+
+struct OdomMetadata {
+    std::vector<float> pos_xyz;
+    std::vector<float> ori_xyzw;
+    std::vector<float> pose_covariance;
+    OdomMetadata() : pos_xyz{0.0,0.0,0.0}, ori_xyzw{0.0,0.0,0.0,1.0}, pose_covariance(36, 0.0f) {    }
+    OdomMetadata(float x, float y, float z, float ox, float oy, float oz, float ow, std::vector<float> cov) :
+            pos_xyz{x,y,z}, ori_xyzw{ox,oy,oz,ow}, pose_covariance(cov) {    }
+    
+    YAML::Node toYAMLNode() const {
+        YAML::Node node;
+        node["pos_xyz"] = pos_xyz;
+        node["ori_xyzw"] = ori_xyzw;
+        YAML::Node cov_node;
+        for (int i = 0; i < 36; i++) {
+            cov_node.push_back(pose_covariance[i]);
+        }
+        node["pose_covariance"] = cov_node;
+        return node;
+    }
+};
 
 class ImageMetadata {
+    TimeStampSource timestamp_source_config = TimeStampSource::USE_INTERNAL_CAMERA;
+
 public:
     using ROSTimeNowCallback = std::function<uint64_t()>;
 
@@ -16,6 +70,9 @@ public:
     void setExposure(uint64_t exposure_ns);
     uint64_t getSyncTimestamp() const;
     void saveYaml(const std::string& filename) const;
+    void setTimestampSource(TimeStampSource source);
+    void addGNSSData(GNSSMetadata gnss) { gnss_data = gnss; }
+    void addOdomData(OdomMetadata odom) { odom_data = odom; }
 
 public:
     ROSTimeNowCallback ros_time_now_cb_;
@@ -35,12 +92,14 @@ public:
     std::string img_name;
     std::string img_pair_name;
     std::string dataset_name;
+
+    GNSSMetadata gnss_data;
+    OdomMetadata odom_data;
 };
 
 // Utility function declarations for image metadata
 std::string getTimeTag();
 std::string getFolderTimetag();
-void saveMetadataYaml(const ImageMetadata& meta, const std::string& filename);
 
 
 /**

@@ -5,12 +5,14 @@
 #define CAMERA_ADAPTER_H
 
 #include <string>
+#include <iostream>
 #include <mutex>
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
+#include <opencv2/imgproc.hpp>
 
-#include "logging_utils.h"
+#include "utils/logging_utils.h"
 #include "utils/image_metadata.h"
 
 void createTestPattern(cv::Mat& image);

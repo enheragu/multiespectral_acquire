@@ -4,14 +4,16 @@
 #define LIDAR_ADAPTER_H
 
 #include <string>
+#include <iostream>
 #include <deque>
 #include <mutex>
 #include <filesystem>
 #include <opencv2/opencv.hpp>
 
-#include "../utils/pointcloud_utils.h"
-#include "../utils/image_metadata.h"
-#include "../utils/logging_utils.h"
+#include "utils/pointcloud_utils.h"
+#include "utils/image_metadata.h"
+#include "utils/logging_utils.h"
+#include "utils/timed_frame_buffer.h"
 
 // Frame data for buffering (pointcloud + intensity image + metadata)
 struct LidarFrameData {
@@ -20,6 +22,12 @@ struct LidarFrameData {
     cv::Mat intensity_image;
     ImageMetadata pc_metadata;
     ImageMetadata intensity_metadata;
+    GNSSMetadata gnss_data;
+    OdomMetadata odom_data;
+    
+
+    void addGNSSData(GNSSMetadata gnss) { gnss_data = gnss; }
+    void addOdomData(OdomMetadata odom) { odom_data = odom; }
     
     void fillMetadata(uint64_t timestamp_ns, uint32_t seq, 
                       const std::string& dataset_name, int frame_rate) {
@@ -75,8 +83,7 @@ class LidarAdapterSlave {
 protected:
     std::shared_ptr<Logger> logger_;
     
-    std::deque<LidarFrameData> buffer_;
-    size_t buffer_size_ = 1;
+    TimedFrameBuffer<LidarFrameData> buffer_;
     std::mutex buffer_mutex_;
     
     int sensor_frame_rate_ = 20;      // Real sensor rate (hardware)
@@ -113,26 +120,6 @@ public:
         return true;
     }
     
-    void init_buffer(int sensor_rate, int configured_rate) {
-        sensor_frame_rate_ = sensor_rate;
-        configured_frame_rate_ = std::max(configured_rate, 1);
-        buffer_size_ = static_cast<size_t>((sensor_frame_rate_ / configured_frame_rate_ + 1) * 3);
-        
-        if (logger_) {
-            logger_->info_stream() << "[LidarAdapterSlave::init_buffer] Buffer size: " << buffer_size_
-                                   << " (sensor: " << sensor_frame_rate_ 
-                                   << " Hz, configured: " << configured_frame_rate_ << " Hz)";
-        }
-    }
-    
-    void addFrameToBuffer(LidarFrameData& frame) {
-        std::lock_guard<std::mutex> lock(buffer_mutex_);
-        if (buffer_.size() >= buffer_size_) {
-            buffer_.pop_front();
-        }
-        buffer_.push_back(std::move(frame));
-    }
-
     void setLogger(std::shared_ptr<Logger> logger) { logger_ = logger; }
 };
 

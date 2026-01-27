@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
+import os
 import threading
 import signal
 
@@ -18,7 +19,11 @@ except ImportError as e:
     using_ros = False
     print(f"[MultiespectralAcquireGui] No ROS detected. Using Dummy Multiespectral Acquire.")
 
-app = Flask(__name__)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+app = Flask(__name__, 
+           template_folder=os.path.join(BASE_DIR, 'templates'),
+           static_folder=os.path.join(BASE_DIR, 'static'))
 # socketio = SocketIO(app, cors_allowed_origins="*") # Allow multiple connections from different origins
 socketio = SocketIO(app, async_mode='threading')
 
@@ -78,12 +83,12 @@ def main():
     if using_ros:
         rospy.init_node('multiespectral_flask_gui', anonymous=True)
         camera_handler = MultiespectralAcquire(socketio)
-        flask_thread = threading.Thread(target=lambda: socketio.run(app, host='0.0.0.0', port=5000, debug=False, use_reloader=False, allow_unsafe_werkzeug=True), daemon=True)
+        flask_thread = threading.Thread(target=lambda: socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False, allow_unsafe_werkzeug=True), daemon=True)
         flask_thread.start()
         rospy.spin()
     else:
         camera_handler = MultiespectralAcquire(socketio)
-        socketio.run(app, host='0.0.0.0', port=5000, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
+        socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False, allow_unsafe_werkzeug=True)
 
 if __name__ == '__main__':
     main()

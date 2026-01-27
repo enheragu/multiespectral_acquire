@@ -388,6 +388,8 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
     Spinnaker::ImagePtr pResultImage = nullptr;
     try
     {
+        // if ptp enabled:
+        metadata.setTimestampSource(TimeStampSource::USE_INTERNAL_CAMERA);
         metadata.initTimestamps(); //Stores timetag when requested to avoid communication delay difference between cameras
         pFlir->TriggerSoftware.Execute();
         metadata.triggerAck();

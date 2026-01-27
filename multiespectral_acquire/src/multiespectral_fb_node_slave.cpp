@@ -5,6 +5,8 @@
 #include "camera_adapter_ros.h"
 #include "multiespectral_acquire/ImageRequest.h"
 #include "utils/image_metadata.h"
+#include "utils/timed_frame_buffer.h"
+
 
 int FLIR_FRAME_RATE = 30;
 
@@ -19,22 +21,20 @@ protected:
         ImageMetadata metadata;
     };
     // circular buffer to store images to select closest with timestamp
-    std::deque<FrameData> image_buffer;
-    size_t buffer_size = 1;
+    TimedFrameBuffer<FrameData> image_buffer_;
 public:
     MultiespectralAcquire(const std::string& name) : CameraAdapterROS(name)
     {
-        this->init_and_start_acquisition(this->getFrameRate());
-        
-        int current_frame_rate = std::max(this->frame_rate, 1);
-        this->buffer_size = (int(FLIR_FRAME_RATE/current_frame_rate) + 1)*3;
+        // Needs the acquisition publisher to be executed at FLIR_FRAME_RATE :)
+        this->init_and_start_acquisition(FLIR_FRAME_RATE); //(this->getFrameRate());
+
         service_ = nh_.advertiseService("multiespectral_slave_service", &MultiespectralAcquire::service_cb, this);
         lidar_client_ = nh_.serviceClient<multiespectral_acquire::ImageRequest>("lidar_slave_service");
     }
     bool service_cb(multiespectral_acquire::ImageRequest::Request &request, multiespectral_acquire::ImageRequest::Response &response) {
         bool ret = false;
         uint64_t timestamp = request.timestamp;
-        if (image_buffer.empty())
+        if (image_buffer_.empty())
         {
             logger_->warn_stream() << "[MASlave::service_cb] Buffer is still empty.";
             response.success = false;
@@ -43,32 +43,24 @@ public:
         else
         {
             // Gets closest (higher or lower)
-            auto closest_it = std::min_element(image_buffer.begin(), image_buffer.end(),
-                [timestamp](const FrameData& a, const FrameData& b) {
-                    return std::abs(static_cast<int64_t>(a.timestamp - timestamp)) <
-                        std::abs(static_cast<int64_t>(b.timestamp - timestamp));
-                });
+            double max_diff = 1.0 / double(std::max(1.0, double(FLIR_FRAME_RATE*0.9)));
+            auto closest_it = image_buffer_.findClosest(timestamp, max_diff);
             
-            // Gets closest (higher or equal)
-            // auto closest_it = std::lower_bound(image_buffer.begin(), image_buffer.end(), timestamp,
-            //     [](const FrameData& a, uint64_t ts) { return a.timestamp < ts; });
-            
-            if (closest_it == image_buffer.end())
+            if (closest_it == nullptr)
             {
                 logger_->error_stream() << "[MASlave::service_cb] No image found in buffer with timestamp constraint provided.";
-            }
-            
-            closest_it->metadata.img_pair_name = request.reference_pair;
-            
-            double time_diff_s = std::abs(static_cast<int64_t>(closest_it->timestamp - timestamp)) / 1e9; // Nanoseconds to seconds conversion
-            // logger_->info_stream() << "[MASlave::service_cb] Closest image found -> time difference: " << time_diff_s << " seconds.";
-            double max_diff = 1.0 / double(std::max(1, FLIR_FRAME_RATE - 1));
-            if (time_diff_s > max_diff)
-            {
-                logger_->warn_stream() << "[MASlave::service_cb] Closest image to " << timestamp << " is " << closest_it->timestamp << "; time difference: " << time_diff_s << " is greater than interval between frames ("<<INTERVAL_BETWEEN_FRAMES_S<<").";
                 response.success = false;
                 return true;
             }
+
+            auto gnss_ptr = gnss_data_buffer_.findClosest(timestamp);
+            if (gnss_ptr) { closest_it->metadata.addGNSSData(gnss_ptr->gnss_data); }
+
+            auto odom_ptr = odom_data_buffer_.findClosest(timestamp);
+            if (odom_ptr) { closest_it->metadata.addOdomData(odom_ptr->odom_data); }
+
+            closest_it->metadata.img_pair_name = request.reference_pair;
+
             // only publishes and stores image if the time constraints are met
             ret = publishImage(closest_it->image, closest_it->metadata);
             if(ret && request.store)
@@ -95,14 +87,7 @@ public:
         response.success = ret;
         return ret;
     }
-    void addImageToBuffer(const cv::Mat& image, ImageMetadata& metadata) 
-    {
-        if (image_buffer.size() >= this->buffer_size)
-        {
-            image_buffer.pop_front();
-        }
-        image_buffer.push_back({metadata.getSyncTimestamp(), image, metadata});
-    }
+
     void acquisition_loop(const ros::TimerEvent&) override
     {
         cv::Mat curr_image(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));  // Init given pattern to check
@@ -115,7 +100,7 @@ public:
         {
             // cv::imshow("Imagen", curr_image);
             // cv::waitKey(0); // Esperar a que se presione una tecla para cerrar la ventana
-            addImageToBuffer(curr_image, metadata);
+            image_buffer_.addFrame(FrameData({metadata.getSyncTimestamp(), curr_image, metadata}));
         }
     }
 

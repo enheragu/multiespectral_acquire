@@ -52,12 +52,11 @@ bool CameraAdapter::init(int frame_rate)
     return result;
 }
 
-bool init_store_folder(std::string output_dataset_path)
+bool CameraAdapter::init_store_folder(std::string output_dataset_path)
 {
     this->dataset_name = getFolderTimetag();
-    img_path = dataset_output_path+std::string("/")+this->dataset_name+std::string("/")+getType()+std::string("/");
+    img_path = output_dataset_path+std::string("/")+this->dataset_name+std::string("/")+getType()+std::string("/");
     std::filesystem::create_directories(img_path);
-    logger_ = std::make_shared<RosLogger>();
     logger_->info_stream() << "[CameraAdapterROS] Images will be stored in path: " << img_path;
 
     return true;
@@ -108,7 +107,7 @@ bool CameraAdapter::storeImage(cv::Mat& curr_image, ImageMetadata& metadata)
         filename << this->img_path << "/" << metadata.img_name;
         cv::imwrite(filename.str().c_str()+std::string(".png"), curr_image);
 
-        saveMetadataYaml(metadata, filename.str().c_str()+std::string(".yaml"));
+        metadata.saveYaml(filename.str().c_str()+std::string(".yaml"));
         
         logger_->debug_stream() << "[CameraAdapter::storeImage] Stored image.";
     } 

@@ -1,7 +1,11 @@
 <launch>
   <!-- Argumentos -->
-  <arg name="dataset_output_path" default="/home/clearpath/images_eeha"/>
+  <arg name="dataset_output_path" default="/home/administrator/images_eeha"/>
   <arg name="frame_rate" default="1"/>
+  <!-- <arg name="gnss_topic" default="/gnss/fix"/> -->
+  <!-- <arg name="odom_topic" default="/odometry/filtered"/> -->
+  <arg name="gnss_topic" default="/gnss/fix"/>
+  <arg name="odom_topic" default="/odometry/filtered"/>
 
   <group ns="Multiespectral">
     <!-- FLIR LWIR (slave) -->
@@ -10,6 +14,9 @@
       <param name="frame_rate" value="$(arg frame_rate)"/>
       <param name="image_topic" value="lwir_camera"/>
       <param name="camera_info_url" value="file://$(find multiespectral_acquire)/conf/lwir_params.yaml"/>
+
+      <param name="gnss_topic" value="$(arg gnss_topic)"/>
+      <param name="odom_topic" value="$(arg odom_topic)"/>
     </node>
 
     <!-- Basler visible (master) -->
@@ -19,11 +26,14 @@
       <param name="frame_rate" value="$(arg frame_rate)"/>
       <param name="image_topic" value="visible_camera"/>
       <param name="camera_info_url" value="file://$(find multiespectral_acquire)/conf/visible_params.yaml"/>
+
+      <param name="gnss_topic" value="$(arg gnss_topic)"/>
+      <param name="odom_topic" value="$(arg odom_topic)"/>
     </node>
 
     <node pkg="multiespectral_acquire" type="lidar_slave" name="lidar_camera" output="screen">
       <param name="dataset_output_path" value="$(arg dataset_output_path)"/>
-      <param name="input_lidar_topic" value="/os_cloud_node/points"/>
+      <param name="input_lidar_topic" value="/ouster/points"/>
       <param name="pointcloud_topic" value="lidar_pointcloud"/>
       <param name="image_topic" value="swir_lidar"/>
       <param name="frame_rate" value="$(arg frame_rate)"/>
@@ -36,6 +46,9 @@
       <param name="fov_h_max_deg" value="20"/>
       <param name="fov_v_min_deg" value="-15"/>
       <param name="fov_v_max_deg" value="15"/>
+
+      <param name="gnss_topic" value="$(arg gnss_topic)"/>
+      <param name="odom_topic" value="$(arg odom_topic)"/>
     </node>
 
   </group>

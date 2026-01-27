@@ -103,8 +103,8 @@ class DummyMultiespectralAcquire:
             
             # Build data dict
             data = {
-                'total_images_received_lwir': frame_rate_lwir.cuontItems(),
-                'total_images_received_rgb': frame_rate_rgb.cuontItems(),
+                'total_images_received_lwir': frame_rate_lwir.countItems(),
+                'total_images_received_rgb': frame_rate_rgb.countItems(),
                 'lwir_img_path': lwir_img_path,
                 'rgb_img_path': rgb_img_path,
                 'lwir_img_storepath': lwir_img_storepath,
@@ -125,17 +125,17 @@ class DummyMultiespectralAcquire:
                     lidar_img_storepath = str(lidar_path)
                     frame_rate_lidar.tick()
                     
-                    data['total_images_received_lidar'] = frame_rate_lidar.cuontItems()
+                    data['total_images_received_lidar'] = frame_rate_lidar.countItems()
                     data['lidar_img_path'] = lidar_img_path
                     data['lidar_img_storepath'] = lidar_img_storepath
                     data['frame_rate_lidar'] = str(frame_rate_lidar)
             
             self.socketio.emit('update_data', data)
 
-            print(f"Total received lwir: {frame_rate_lwir.cuontItems()}")
-            print(f"Total received rgb: {frame_rate_rgb.cuontItems()}")
+            print(f"Total received lwir: {frame_rate_lwir.countItems()}")
+            print(f"Total received rgb: {frame_rate_rgb.countItems()}")
             if lidar_available:
-                print(f"Total received lidar: {frame_rate_lidar.cuontItems()}")
+                print(f"Total received lidar: {frame_rate_lidar.countItems()}")
             print(f"{lwir_img_storepath = }")
             print(f"{rgb_img_storepath = }")
 

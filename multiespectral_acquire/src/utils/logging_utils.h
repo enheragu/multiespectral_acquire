@@ -1,6 +1,8 @@
 /**
  * Logging utils interface to be used with non-ROS components to maintain compatibility and avoid ROS dependencies.
  */
+#ifndef LOGGING_UTILS_H
+#define LOGGING_UTILS_H
 
 #define ERROR_F "\x1b[31m"
 #define SUCCEED_F "\x1b[32m"
@@ -15,12 +17,24 @@ class LoggerStreamHelper {
 public:
     LoggerStreamHelper(std::function<void(const std::string&)> cb) : cb_(cb) {}
     ~LoggerStreamHelper() { cb_(oss_.str()); }
+
     template<typename T>
-    LoggerStreamHelper& operator<<(const T& val) { oss_ << val; return *this; }
+    LoggerStreamHelper& operator<<(const T& val) {
+        oss_ << val;
+        return *this;
+    }
+
+    // Soporte para manipuladores de ostream como std::endl
+    LoggerStreamHelper& operator<<(std::ostream& (*manip)(std::ostream&)) {
+        manip(oss_);
+        return *this;
+    }
+
 private:
     std::ostringstream oss_;
     std::function<void(const std::string&)> cb_;
 };
+
 
 class Logger {
 public:
@@ -37,4 +51,6 @@ public:
     virtual LoggerStreamHelper fatal_stream() { return LoggerStreamHelper([this](const std::string& s){ fatal(s); }); }
     virtual ~Logger() = default;
 };
+
+#endif // LOGGING_UTILS_H
 

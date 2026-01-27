@@ -28,9 +28,12 @@ logMinDelayReqInterval 0
 ```
 
 Run the PTP service and synchronize system clock :)
+(in the robot intefaces are enp1s0 and enp2s0)
 ```sh
-sudo ptp4l -i eth0 -m -S -f /etc/linuxptp/ptp4l.conf
-sudo phc2sys -c CLOCK_REALTIME -s eth0 -w -m
+sudo ptp4l -i enp1s0 -m -S -f /etc/linuxptp/ptp4l.conf
+sudo phc2sys -c CLOCK_REALTIME -s enp1s0 -w -m
+sudo ptp4l -i enp2s0 -m -S -f /etc/linuxptp/ptp4l.conf
+sudo phc2sys -c CLOCK_REALTIME -s enp2s0 -w -m
 
 ```
 

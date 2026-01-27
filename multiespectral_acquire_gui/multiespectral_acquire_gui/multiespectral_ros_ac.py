@@ -27,10 +27,10 @@ store_in_drive = False
 camera_handler = None
 lidar_available = False
 
-basler_ac_name = "AS"
-flir_topic_name = "lwir_camera/compressed"
-basler_topic_name = "visible_camera/compressed"
-lidar_topic_name = "swir_lidar/compressed"
+basler_ac_name = "/Multiespectral/AS"
+flir_topic_name = "/Multiespectral/lwir_camera/compressed"
+basler_topic_name = "/Multiespectral/visible_camera/compressed"
+lidar_topic_name = "/Multiespectral/swir_lidar/compressed"
 image_size = {'lwir': (320, 240), 'rgb': (320, 240), 'swir': (320, 240)}
 
 bridge = CvBridge()
@@ -54,7 +54,7 @@ class RosMultiespectralAcquire(object):
         self.lidar_sub = None
         lidar_available = self._check_topic_exists(lidar_topic_name, timeout=2.0)
         if lidar_available:
-            self.lidar_sub = rospy.Subscriber(lidar_topic_name, Image, self.lidar_image_cb, queue_size=1)
+            self.lidar_sub = rospy.Subscriber(lidar_topic_name, CompressedImage, self.lidar_image_cb, queue_size=1)
             rospy.loginfo(f"[MultiespectralAcquireGui] LiDAR topic '{lidar_topic_name}' found.")
         else:
             rospy.logwarn(f"[MultiespectralAcquireGui] LiDAR topic '{lidar_topic_name}' not found. LIDAR display disabled.")
