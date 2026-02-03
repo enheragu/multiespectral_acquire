@@ -18,14 +18,24 @@ public:
     double slope = 1.0;
     
     bool initialized = false;
-    double alpha = 0.05; // Smoothing factor (lower = more conservative)
+    double alpha_offset = 0.05; // Smoothing factor for offset (lower = more conservative)
+    double alpha_slope = 0.01;  // Smoothing factor for slope (increased for faster adaptation)
     int samples_count = 0;
     std::string camera_name = "DefaultCamera"; // For logging identification
     
     std::unique_ptr<std::deque<double>> recent_errors_ms;
+    std::unique_ptr<std::deque<std::pair<double, int64_t>>> recent_samples; // (cam_ns, pc_ns) pairs
     static constexpr size_t max_buffer_size = 100;
+    static constexpr size_t slope_recalc_window = 50; // Window for slope recalculation
     
-    TimestampCalibration() : recent_errors_ms(new std::deque<double>()) {}
+    // Drift detection
+    int consecutive_anomalies = 0;
+    int anomaly_log_throttle = 0;  // Throttle excessive logging
+    double last_error_trend = 0.0; // Track error trend direction
+    
+    TimestampCalibration() : 
+        recent_errors_ms(new std::deque<double>()),
+        recent_samples(new std::deque<std::pair<double, int64_t>>()) {}
     
     // Movement constructor
     TimestampCalibration(TimestampCalibration&& other) noexcept = default;
@@ -47,9 +57,9 @@ public:
         double error_ns = pc_ns - predicted_pc_ns;
         double error_ms = error_ns / 1e6;
         
-        // DEBUG each 10 frames
+        // DEBUG each 50 frames
         static int debug_counter = 0;
-        if (++debug_counter % 10 == 0) {
+        if (++debug_counter % 50 == 0) {
             std::cout << "[" << camera_name << "::TimestampCalibration] cam_ticks=" << cam_ticks 
                     << ", cam_ns=" << cam_ns/1e9 << "s"
                     << ", pc_ns=" << pc_ns/1e9 << "s"
@@ -63,30 +73,146 @@ public:
             recent_errors_ms->pop_front();
         }
         
-        // Update with exponential filter only if error is not anomalous (< 100ms)
-        if (std::abs(error_ms) < 100.0) {
-            offset_ns += alpha * error_ns;
+        // Adaptive threshold based on recent error statistics
+        double mean_error = getMeanError();
+        double std_dev = getStdDevError();
+        double adaptive_threshold = std::max(100.0, std::abs(mean_error) + 3.0 * std_dev);
+        
+        // Detect systematic drift: if error is consistently growing in one direction
+        bool is_systematic_drift = false;
+        if (recent_errors_ms->size() >= 10) {
+            double error_trend = getErrorTrend();
+            // If error is growing by more than 5ms per sample consistently, it's systematic drift
+            if (std::abs(error_trend) > 5.0) {
+                is_systematic_drift = true;
+            }
+        }
+        
+        // Update with exponential filter if error is not anomalous OR if systematic drift detected
+        if (std::abs(error_ms) < adaptive_threshold || is_systematic_drift) {
+            consecutive_anomalies = 0;  // Reset anomaly counter
+            
+            // Store sample for slope recalculation
+            recent_samples->push_back({cam_ns, pc_ns});
+            if (recent_samples->size() > slope_recalc_window) {
+                recent_samples->pop_front();
+            }
+            
+            // Update offset using exponential moving average
+            offset_ns += alpha_offset * error_ns;
             samples_count++;
+            
+            // Recalculate slope more frequently when drift is detected
+            int recalc_interval = is_systematic_drift ? 10 : 25;
+            if (samples_count % recalc_interval == 0 && recent_samples->size() >= 10) {
+                recalculateSlope(is_systematic_drift);
+            }
             
             // Log every 100 samples
             if (samples_count % 100 == 0) {
-                double mean_error = 0;
-                for (double e : *recent_errors_ms) mean_error += e;
-                mean_error /= recent_errors_ms->size();
-                
-                double std_dev = 0;
-                for (double e : *recent_errors_ms) {
-                    std_dev += (e - mean_error) * (e - mean_error);
-                }
-                std_dev = std::sqrt(std_dev / recent_errors_ms->size());
-                
                 std::cout << "[" << camera_name << "::TimestampCalibration] Adaptive #" << samples_count 
                           << " - Offset: " << offset_ns/1e6 << " ms"
+                          << ", Slope: " << slope
                           << ", Mean error: " << mean_error << " ms (±" << std_dev << " ms)" 
+                          << ", Threshold: " << adaptive_threshold << " ms"
+                          << (is_systematic_drift ? " [DRIFT CORRECTION ACTIVE]" : "")
                           << std::endl;
             }
         } else {
-            std::cout << "[" << camera_name << "::TimestampCalibration] Anomalous sample ignored (error: " << error_ms << " ms)" << std::endl;
+            consecutive_anomalies++;
+            anomaly_log_throttle++;
+            
+            // Only log first few anomalies, then every 10th, to reduce log spam
+            if (consecutive_anomalies <= 3 || anomaly_log_throttle % 10 == 0) {
+                std::cout << "[" << camera_name << "::TimestampCalibration] Anomalous sample ignored (error: " 
+                          << error_ms << " ms, threshold: " << adaptive_threshold << " ms)";
+                if (consecutive_anomalies > 3) {
+                    std::cout << " [" << consecutive_anomalies << " consecutive]";
+                }
+                std::cout << std::endl;
+            }
+            
+            // If too many consecutive anomalies, force a slope recalculation with higher alpha
+            if (consecutive_anomalies >= 20) {
+                std::cout << "[" << camera_name << "::TimestampCalibration] WARNING: " << consecutive_anomalies 
+                          << " consecutive anomalies - forcing recalibration" << std::endl;
+                
+                // Add current sample despite being anomalous to allow recalibration
+                recent_samples->push_back({cam_ns, pc_ns});
+                if (recent_samples->size() > slope_recalc_window) {
+                    recent_samples->pop_front();
+                }
+                
+                // Force aggressive recalibration
+                recalculateSlope(true);
+                consecutive_anomalies = 0;
+                anomaly_log_throttle = 0;
+            }
+        }
+    }
+    
+    /**
+     * @brief Calculate error trend (slope of error over recent samples)
+     * @return Positive = error growing, negative = error shrinking
+     */
+    double getErrorTrend() const {
+        if (recent_errors_ms->size() < 5) return 0.0;
+        
+        // Simple linear regression on recent errors to detect trend
+        double sum_x = 0, sum_y = 0, sum_xy = 0, sum_xx = 0;
+        int n = std::min((size_t)20, recent_errors_ms->size());  // Use last 20 samples
+        
+        auto it = recent_errors_ms->end();
+        std::advance(it, -n);
+        
+        for (int i = 0; i < n; ++i, ++it) {
+            sum_x += i;
+            sum_y += *it;
+            sum_xy += i * (*it);
+            sum_xx += i * i;
+        }
+        
+        return (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
+    }
+    
+    /**
+     * @brief Recalculate slope using linear regression on recent samples
+     * @param aggressive If true, apply slope change more aggressively (for drift correction)
+     */
+    void recalculateSlope(bool aggressive = false) {
+        if (recent_samples->size() < 10) return;
+        
+        double sum_x = 0, sum_y = 0, sum_xy = 0, sum_xx = 0;
+        int n = recent_samples->size();
+        
+        for (const auto& sample : *recent_samples) {
+            double cam_ns = sample.first;
+            int64_t pc_ns = sample.second;
+            sum_x += cam_ns;
+            sum_y += pc_ns;
+            sum_xy += cam_ns * pc_ns;
+            sum_xx += cam_ns * cam_ns;
+        }
+        
+        double new_slope = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
+        double new_offset = (sum_y - new_slope * sum_x) / n;
+        
+        // Use higher alpha when in aggressive mode (drift correction)
+        double effective_alpha = aggressive ? 0.1 : alpha_slope;
+        
+        // Apply exponential smoothing to slope changes
+        double old_slope = slope;
+        slope = (1.0 - effective_alpha) * slope + effective_alpha * new_slope;
+        
+        // Update offset more aggressively when slope changes
+        offset_ns = (1.0 - effective_alpha) * offset_ns + effective_alpha * new_offset;
+        
+        // Log slope changes if significant
+        if (std::abs(old_slope - slope) > 0.0001) {
+            std::cout << "[" << camera_name << "::TimestampCalibration] Slope adjusted: " 
+                      << old_slope << " -> " << slope 
+                      << " (delta: " << (slope - old_slope) << ")"
+                      << (aggressive ? " [AGGRESSIVE]" : "") << std::endl;
         }
     }
     
@@ -186,7 +312,8 @@ inline TimestampCalibration performInitialCalibration(
     std::cout << "              - Offset: " << cal.offset_ns/1e6 << " ms" << std::endl;
     std::cout << "              - R²: " << r_squared << std::endl;
     std::cout << "              - Max error: " << max_error_ms << " ms" << std::endl;
-    std::cout << "              - Adaptive calibration ENABLED (alpha=" << cal.alpha << ")" << std::endl;
+    std::cout << "              - Adaptive calibration ENABLED (alpha_offset=" << cal.alpha_offset 
+              << ", alpha_slope=" << cal.alpha_slope << ")" << std::endl;
     
     if(r_squared < 0.99) {
         std::cerr << "[" << camera_name << "::TimestampCalibration] WARNING: Low R² (" << r_squared 

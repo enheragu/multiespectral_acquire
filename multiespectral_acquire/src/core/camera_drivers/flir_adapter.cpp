@@ -72,6 +72,9 @@ void setNodeName(const std::string& name)
  */
 std::string getName()
 {
+    // Update model name if camera available
+    model_name = getModelName();
+
     // Return node name if set, otherwise model name
     if(camera_name == "Default:FlirA68" && model_name != "Unknown")
     {
@@ -92,7 +95,7 @@ std::string getModelName()
             Spinnaker::GenApi::CStringPtr ptrModelName = nodeMap.GetNode("DeviceModelName");
             if (IsAvailable(ptrModelName) && IsReadable(ptrModelName))
             {
-                model_name = std::string(ptrModelName->GetValue());
+                model_name = std::string("Flir ") + std::string(ptrModelName->GetValue());
             }
         } catch (...) {
             // Ignore errors
@@ -512,7 +515,8 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
         if (pResultImage->IsIncomplete())
         {
             std::cerr << "[FlirAdapter::acquireImage] Image incomplete with image status " << pResultImage->GetImageStatus() << std::endl;
-            result =  false;
+            pResultImage->Release();
+            return false;
         }
         else
         {
@@ -525,9 +529,8 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
             unsigned int num_channels = convertedImage->GetNumChannels();
             void *image_data = convertedImage->GetData();
             unsigned int stride = convertedImage->GetStride();
-            image = cv::Mat(rows, cols, (num_channels == 3) ? CV_8UC3 : CV_8UC1, image_data, stride);
+            image = cv::Mat(rows, cols, (num_channels == 3) ? CV_8UC3 : CV_8UC1, image_data, stride).clone();
             
-
             /**************************
             **   Extract metadata    **
             ***************************/
@@ -576,6 +579,8 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
             Spinnaker::GenApi::CFloatPtr gain = nodemap.GetNode("Gain");
             if (Spinnaker::GenApi::IsReadable(gain))
                 metadata.gain = gain->GetValue();
+            
+                result = true;
 
         }      
         pResultImage->Release();  

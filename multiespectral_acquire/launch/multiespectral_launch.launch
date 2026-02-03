@@ -8,7 +8,7 @@
   <arg name="output_path" default="$(arg dataset_output_path)/mult_$(arg session_folder)"/>
   <arg name="output_frame_rate" default="1"/>
   <arg name="gnss_topic" default="/gnss/fix"/>
-  <arg name="odom_topic" default="/odometry/filtered"/>
+  <arg name="odom_topic" default="/odometry/combined"/>
   <arg name="master_topic" default="visible_camera/image_with_metadata"/>
   
   <!-- Camera PTP and Exposure Configuration -->
@@ -25,14 +25,14 @@
   <arg name="fov_use_angular" default="true"/>
   <arg name="fov_h_min_deg" default="-15"/>
   <arg name="fov_h_max_deg" default="15"/>
-  <arg name="fov_v_min_deg" default="-13"/>
-  <arg name="fov_v_max_deg" default="13"/>
+  <arg name="fov_v_min_deg" default="-12"/>
+  <arg name="fov_v_max_deg" default="11"/>
 
   <group ns="Multiespectral">
     <!-- ====== CAMERA HANDLERS (only publish images) ====== -->
     
     <!-- Visible Camera (Basler) - acts as master (all data syncs to this) -->
-    <node pkg="multiespectral_acquire" type="basler_camera_handler" name="visible_camera" output="screen">
+    <node pkg="multiespectral_acquire" type="basler_camera_handler" name="visible_camera" output="screen" required="true">
       <param name="image_topic" value="visible_camera"/>
       <param name="camera_ip" value="$(env MULTIESPECTRAL_VISIBLE_IP)"/>
       <param name="output_frame_rate" value="$(arg output_frame_rate)"/>
@@ -43,7 +43,7 @@
     
     <!-- LWIR Camera (FLIR) -->
     <!-- FLIR default capturing frame rate is 30Hz -->
-    <node pkg="multiespectral_acquire" type="flir_camera_handler" name="lwir_camera" output="screen">
+    <node pkg="multiespectral_acquire" type="flir_camera_handler" name="lwir_camera" output="screen" required="true">
       <param name="image_topic" value="lwir_camera"/>
       <param name="frame_rate" value="30"/>
       <param name="camera_info_url" value="file://$(find multiespectral_acquire)/conf/lwir_params.yaml"/>
@@ -68,5 +68,7 @@
       <arg name="ouster_exposure_ns" value="$(arg ouster_exposure_ns)"/>
     </include>
 
+    <include file="$(find temperature_driver)/launch/dht22.launch"/>
+    
   </group>
 </launch>

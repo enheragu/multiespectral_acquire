@@ -87,43 +87,48 @@ bool CameraAdapter::grabImage(cv::Mat& curr_image, ImageMetadata& metadata)
     const std::scoped_lock<std::mutex> lock(camera_mutex);
     bool result =  acquireImage(curr_image, metadata);
 
+    std::ostringstream oss;
+    oss << std::setfill('0') << std::setw(6) << this->captured_images;
+    metadata.img_name = getType() + "_" + oss.str();
+    this->captured_images++;
+
     logger_->debug_stream() << "[CameraAdapter::grabImage] Aquired image.";
     if(!result) logger_->error_stream() << "[CameraAdapter::grabImage] Could not acquire image from " << getName() << " camera.";
     return result;
 }
 
-bool CameraAdapter::storeImage(cv::Mat& curr_image, ImageMetadata& metadata)
-{
-    
-    if (!curr_image.empty()) 
-    {
-        const std::scoped_lock<std::mutex> lock(camera_mutex);
-        std::ostringstream oss;
-        oss << std::setfill('0') << std::setw(6) << this->stored_images;
-        metadata.img_name = getType() + "_" + oss.str();
-        this->stored_images++;
+// Not in use anymore :)
+// bool CameraAdapter::storeImage(cv::Mat& curr_image, ImageMetadata& metadata)
+// {
+//     if (!curr_image.empty()) 
+//     {
+//         const std::scoped_lock<std::mutex> lock(camera_mutex);
+//         std::ostringstream oss;
+//         oss << std::setfill('0') << std::setw(6) << this->captured_images;
+//         metadata.img_name = getType() + "_" + oss.str();
+//         this->captured_images++;
 
-        std::ostringstream filename;
-        filename << this->img_path << "/" << metadata.img_name;
-        cv::imwrite(filename.str().c_str()+std::string(".png"), curr_image);
+//         std::ostringstream filename;
+//         filename << this->img_path << "/" << metadata.img_name;
+//         cv::imwrite(filename.str().c_str()+std::string(".png"), curr_image);
 
-        metadata.saveYaml(filename.str().c_str()+std::string(".yaml"));
+//         metadata.saveYaml(filename.str().c_str()+std::string(".yaml"));
         
-        logger_->debug_stream() << "[CameraAdapter::storeImage] Stored image.";
-    } 
-    return true;
-}
+//         logger_->debug_stream() << "[CameraAdapter::storeImage] Stored image.";
+//     } 
+//     return true;
+// }
 
-bool CameraAdapter::grabPublishImage(cv::Mat& curr_image, ImageMetadata& metadata)
-{
-    logger_->debug_stream() << "[CameraAdapter::grabPublishImage] Grabbing image.";
-    bool result = grabImage(curr_image, metadata);
-    if (!result) logger_->error_stream() << "[CameraAdapter::grabPublishImage] Could not grab image from " << getName() << " camera.";
-    if (result)
-    {
-        result = publishImage(curr_image, metadata);
-    }
-    if (!result) logger_->error_stream() << "[CameraAdapter::grabPublishImage] Could not publish image from " << getName() << " camera.";
-    logger_->debug_stream() << "[CameraAdapter::grabPublishImage] Image processed.";
-    return result;
-}
+// bool CameraAdapter::grabPublishImage(cv::Mat& curr_image, ImageMetadata& metadata)
+// {
+//     logger_->debug_stream() << "[CameraAdapter::grabPublishImage] Grabbing image.";
+//     bool result = grabImage(curr_image, metadata);
+//     if (!result) logger_->error_stream() << "[CameraAdapter::grabPublishImage] Could not grab image from " << getName() << " camera.";
+//     if (result)
+//     {
+//         result = publishImage(curr_image, metadata);
+//     }
+//     if (!result) logger_->error_stream() << "[CameraAdapter::grabPublishImage] Could not publish image from " << getName() << " camera.";
+//     logger_->debug_stream() << "[CameraAdapter::grabPublishImage] Image processed.";
+//     return result;
+// }

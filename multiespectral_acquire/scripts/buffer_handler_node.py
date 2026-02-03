@@ -12,24 +12,34 @@ from pathlib import Path
 import importlib
 import cv2
 import numpy as np
+import threading
 from cv_bridge import CvBridge
 from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import Bool
 import sensor_msgs.point_cloud2 as pc2
 
 class TimedBuffer:
-    """Generic buffer for timestamped data"""
+    """Generic buffer for timestamped data (thread-safe)"""
     def __init__(self, max_size=50):
         self.buffer = deque(maxlen=max_size)
+        self.lock = threading.Lock()  # Protect buffer from concurrent access
+        self.last_add_time = None  # Track when buffer was last updated
     
     def add(self, timestamp, data):
-        self.buffer.append({'timestamp': timestamp, 'data': data})
+        with self.lock:
+            self.buffer.append({'timestamp': timestamp, 'data': data})
+            self.last_add_time = rospy.Time.now()
     
     def find_closest(self, target_timestamp, max_diff_sec=0.1):
-        if not self.buffer:
-            return None
+        with self.lock:
+            if not self.buffer:
+                return None
+            
+            # Create a snapshot to avoid "deque mutated during iteration" error
+            buffer_snapshot = list(self.buffer)
         
-        closest = min(self.buffer, key=lambda x: abs(x['timestamp'] - target_timestamp))
+        # Find closest outside the lock (safe to iterate over list)
+        closest = min(buffer_snapshot, key=lambda x: abs(x['timestamp'] - target_timestamp))
         time_diff = abs(closest['timestamp'] - target_timestamp) / 1e9
         
         if time_diff <= max_diff_sec:
@@ -37,7 +47,15 @@ class TimedBuffer:
         return None
     
     def is_empty(self):
-        return len(self.buffer) == 0
+        with self.lock:
+            return len(self.buffer) == 0
+    
+    def get_time_since_last_update(self):
+        """Get seconds since last buffer update"""
+        with self.lock:
+            if self.last_add_time is None:
+                return None
+            return (rospy.Time.now() - self.last_add_time).to_sec()
 
 
 class GenericBufferHandler:
@@ -87,10 +105,11 @@ class GenericBufferHandler:
         self.buffer = TimedBuffer()
         self.bridge = CvBridge()
         
-        # Create publisher for synchronized data (republish what gets stored)
-        sync_topic = self.data_topic.rstrip('/') + '_sync'
-        self.sync_pub = rospy.Publisher(sync_topic, rospy.AnyMsg, queue_size=10)
-        rospy.loginfo(f"[BufferHandler::{self.data_topic}] Will republish to: {sync_topic}")
+        # Publisher for synchronized data (will be created dynamically with correct type)
+        self.sync_topic = self.data_topic.rstrip('/') + '_sync'
+        self.sync_pub = None  # Will be initialized on first message
+        self.sync_msg_class = None
+        rospy.loginfo(f"[BufferHandler::{self.data_topic}] Will republish to: {self.sync_topic}")
         
         # Subscribe to recording control topic (shared across all handlers)
         self.control_sub = rospy.Subscriber('/Multiespectral/recording_enabled', Bool, self.recording_control_callback)
@@ -166,6 +185,19 @@ class GenericBufferHandler:
             rospy.logwarn_throttle(5.0, "[BufferHandler::{self.data_topic}] Recording enabled but storage path not created yet")
             return
     
+    def _initialize_sync_publisher(self, msg_raw):
+        """Initialize the sync publisher with the correct message type on first message"""
+        if self.sync_pub is None:
+            try:
+                msg_type_str = msg_raw._connection_header['type']
+                self.sync_msg_class = self._get_message_class(msg_type_str)
+                self.sync_pub = rospy.Publisher(self.sync_topic, self.sync_msg_class, queue_size=10, latch=False)
+                rospy.loginfo(f"[BufferHandler::{self.data_topic}] Initialized sync publisher with type: {msg_type_str}")
+            except Exception as e:
+                rospy.logerr(f"[BufferHandler::{self.data_topic}] Failed to initialize sync publisher: {e}")
+                # Fallback to AnyMsg if type detection fails
+                self.sync_pub = rospy.Publisher(self.sync_topic, rospy.AnyMsg, queue_size=10)
+    
     def get_timestamp_from_msg(self, msg):
         """Extract timestamp from message (try header first)"""
         try:
@@ -201,24 +233,32 @@ class GenericBufferHandler:
         if not self.topic_active:
             return
         
+        # Initialize sync publisher on first message
+        self._initialize_sync_publisher(msg_raw)
+        
         # Get timestamp from message
         timestamp = self.get_timestamp_from_msg(msg_raw)
         
-        # If store_all mode, handle directly
+        # If store_all mode, handle directly (master needs to be stored but not synchronized)
         if self.store_all:
             # Deserialize
             msg_class = self._get_message_class(msg_raw._connection_header['type'])
             msg = msg_class().deserialize(msg_raw._buff)
             
             # Always republish synchronized message (regardless of recording state)
-            self.sync_pub.publish(msg_raw)
+            if self.sync_pub is not None:
+                try:
+                    self.sync_pub.publish(msg)
+                except Exception as e:
+                    rospy.logwarn_throttle(10.0, f"[BufferHandler::{self.data_topic}] Failed to republish: {e}")
             
             # Store to disk only if recording enabled
             if self.recording_enabled:
                 if not self.storage_path_created:
-                    rospy.logwarn_throttle(5.0, "[BufferHandler::{self.data_topic}] Recording enabled but storage path not created yet")
+                    rospy.logwarn_throttfle(5.0, f"[BufferHandler::{self.data_topic}] Recording enabled but storage path not created yet")
                     return
-                self.store_message(msg, str(timestamp))
+                base_name = msg.metadata.img_name
+                self.store_message(msg, base_name)
         else:
             # Buffer mode: always buffer for potential sync
             self.buffer.add(timestamp, msg_raw)
@@ -229,9 +269,6 @@ class GenericBufferHandler:
         if not self.topic_active:
             return
         
-        if not self.recording_enabled:
-            return
-        
         # Use camera_timestamp from header.stamp (ROS convention)
         camera_timestamp = msg.metadata.header.stamp.to_nsec()
         
@@ -239,6 +276,10 @@ class GenericBufferHandler:
         # This will auto-detect from message or use parameter fallback
         if len(self.buffer.buffer) > 0:
             sample_msg_raw = self.buffer.buffer[0]['data']
+            
+            # Initialize sync publisher on first master callback with buffered data
+            self._initialize_sync_publisher(sample_msg_raw)
+            
             exposure_time = self.get_exposure_from_msg(sample_msg_raw)
             
             if exposure_time > 0 and self.exposure_time_ns == 0:
@@ -263,32 +304,49 @@ class GenericBufferHandler:
         if closest is None:
             # Provide detailed diagnostics
             buffer_size = len(self.buffer.buffer)
+            time_since_update = self.buffer.get_time_since_last_update()
+            
             if buffer_size == 0:
-                rospy.logwarn(f"[BufferHandler::{self.data_topic}] No matching data - BUFFER EMPTY (no messages received)")
+                if time_since_update is None:
+                    rospy.logwarn(f"[BufferHandler::{self.data_topic}] Buffer empty - no messages received yet")
+                else:
+                    rospy.logwarn(f"[BufferHandler::{self.data_topic}] Buffer empty - not updated for {time_since_update:.1f}s (possible source node crash)")
             else:
                 # Find actual closest message and calculate time difference
                 actual_closest = min(self.buffer.buffer, key=lambda x: abs(x['timestamp'] - sync_timestamp))
                 time_diff_ms = abs(actual_closest['timestamp'] - sync_timestamp) / 1e6
-                rospy.logwarn(f"[BufferHandler::{self.data_topic}] No matching data - buffer_size={buffer_size}, "
-                              f"closest_diff={time_diff_ms:.1f}ms (max_allowed={self.max_time_diff*1000:.0f}ms)")
+                update_info = f", not updated for {time_since_update:.1f}s" if time_since_update and time_since_update > 2.0 else ""
+                rospy.logwarn(f"[BufferHandler::{self.data_topic}] No match found - buffer_size={buffer_size}, "
+                              f"closest_diff={time_diff_ms:.1f}ms (max_allowed={self.max_time_diff*1000:.0f}ms){update_info}")
             return
         
         # Always republish synchronized message (regardless of recording state)
-        try:
-            msg_class = type(closest['data'])
-            sync_msg = rospy.AnyMsg()
-            sync_msg._buff = closest['data'].serialize()
-            sync_msg._connection_header = {'type': msg_class._type}
-            self.sync_pub.publish(sync_msg)
-        except Exception as e:
-            rospy.logdebug(f"[BufferHandler::{self.data_topic}] Could not republish sync message: {e}")
+        msg_deserialized = None
+        if self.sync_pub is not None:
+            try:
+                # Deserialize the message properly
+                msg_class = self._get_message_class(closest['data']._connection_header['type'])
+                msg_deserialized = msg_class().deserialize(closest['data']._buff)
+                self.sync_pub.publish(msg_deserialized)
+            except Exception as e:
+                rospy.logdebug(f"[BufferHandler::{self.data_topic}] Could not republish sync message: {e}")
         
         # Store to disk only if recording enabled
         if self.recording_enabled:
             if not self.storage_path_created:
                 rospy.logwarn_throttle(5.0, "[BufferHandler::{self.data_topic}] Recording enabled but storage path not created yet")
                 return
-            self.store_message(closest['data'], base_name)
+            
+            # Deserialize message if not already done for republishing
+            if msg_deserialized is None:
+                try:
+                    msg_class = self._get_message_class(closest['data']._connection_header['type'])
+                    msg_deserialized = msg_class().deserialize(closest['data']._buff)
+                except Exception as e:
+                    rospy.logerr(f"[BufferHandler::{self.data_topic}] Failed to deserialize message for storage: {e}")
+                    return
+            
+            self.store_message(msg_deserialized, base_name)
     
     def store_message(self, msg, base_name):
         """Store message based on handler type"""

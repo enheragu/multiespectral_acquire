@@ -6,7 +6,7 @@
   
   <!-- Additional topics -->
   <arg name="gnss_topic" default="/gnss/fix"/>
-  <arg name="odom_topic" default="/odometry/filtered"/>
+  <arg name="odom_topic" default="/odometry/combined"/>
 
   <arg name="max_time_diff_ouster" value="0.15"/>
   
@@ -93,6 +93,13 @@
     <param name="data_topic" value="$(arg odom_topic)"/>
     <param name="master_topic" value="$(arg master_topic)"/>
     <param name="output_path" value="$(arg output_path)/odom"/>
+    <param name="max_time_diff" value="1.5"/>
+  </node>
+
+    <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_dht22" output="screen">
+    <param name="data_topic" value="/dht22_node/data"/>
+    <param name="master_topic" value="$(arg master_topic)"/>
+    <param name="output_path" value="$(arg output_path)/dht22"/>
     <param name="max_time_diff" value="1.5"/>
   </node>
 

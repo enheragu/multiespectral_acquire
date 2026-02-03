@@ -43,12 +43,16 @@ class CameraHandlerNode : public CameraAdapter {
     std::string topic_name_;
     std::string camera_info_cfg_;
     
+    // Error tracking for graceful degradation
+    int consecutive_errors_ = 0;
+    static constexpr int MAX_CONSECUTIVE_ERRORS = 10;
+    
 public:
     CameraHandlerNode() : nh_(), pnh_("~"), it_(nh_) {
         this->setLogger(std::make_shared<RosLogger>());
         
         pnh_.param<std::string>("image_topic", topic_name_, getType() + "_image");
-        pnh_.param<int>("frame_rate", frame_rate, 5);
+        pnh_.param<int>("output_frame_rate", frame_rate, 5);
         pnh_.param<std::string>("camera_ip", camera_ip, "");
         pnh_.param<std::string>("camera_info_url", camera_info_cfg_, "");
         
@@ -82,7 +86,7 @@ public:
         
         // Camera info manager
         if (!camera_info_cfg_.empty()) {
-            cinfo_ = std::make_shared<camera_info_manager::CameraInfoManager>(nh_, getName(), camera_info_cfg_);
+            cinfo_ = std::make_shared<camera_info_manager::CameraInfoManager>(nh_, getModelName(), camera_info_cfg_);
         }
         
         // Start acquisition timer
@@ -93,6 +97,11 @@ public:
     
     void acquisition_cb(const ros::TimerEvent&) {
         cv::Mat curr_image;
+        
+        // default test image for debugging
+        curr_image = cv::Mat(480, 640, CV_8UC1, cv::Scalar(0));
+        createTestPattern(curr_image);
+
         ImageMetadata metadata;
         metadata.dataset_name = dataset_name;
         metadata.setROSTimeNowCallback([]() { return static_cast<uint64_t>(ros::Time::now().toNSec()); });
@@ -101,9 +110,18 @@ public:
             logger_->error_stream() << "[CameraHandlerNode] Failed to grab image";
             return;
         }
+
+        std::string encoding;
+        if (curr_image.type() == CV_8UC3) {
+            encoding = "bgr8";
+        } else if (curr_image.type() == CV_8UC1) {
+            encoding = "mono8";
+        } else {
+            logger_->error_stream() << "Unsupported image type: " << curr_image.type() << std::endl;
+            return;
+        }
         
         // Publish image (for visualization)
-        std::string encoding = (curr_image.type() == CV_8UC3) ? "bgr8" : "mono8";
         std_msgs::Header header;
         // Use camera_timestamp in header (ROS convention)
         header.stamp.sec = metadata.camera_timestamp / 1000000000ULL;
