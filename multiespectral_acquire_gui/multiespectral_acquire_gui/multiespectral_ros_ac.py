@@ -32,13 +32,16 @@ gui_title = "Camera GUI"
 # Topic names (will be read from parameters)
 recording_control_topic = "/Multiespectral/recording_enabled"
 
+# LIDAR topic options (will be read from parameters)
+lidar_topic_options = []
+
 image_size = {'camera1': (320, 240), 'camera2': (320, 240), 'lidar': (320, 240)}
 
 bridge = CvBridge()
 
 class RosMultiespectralAcquire(object):
     def __init__(self, socketio):
-        global lidar_available, camera1_display_name, camera2_display_name, lidar_display_name, gui_title
+        global lidar_available, camera1_display_name, camera2_display_name, lidar_display_name, gui_title, lidar_topic_options
         self.socketio = socketio
         
         # Read GUI configuration from ROS parameters
@@ -52,6 +55,14 @@ class RosMultiespectralAcquire(object):
         camera1_display_name = rospy.get_param('~camera1_name', 'Camera 1')
         camera2_display_name = rospy.get_param('~camera2_name', 'Camera 2')
         lidar_display_name = rospy.get_param('~lidar_name', 'LIDAR Image')
+        
+        # Read LIDAR topic options from ROS parameters
+        lidar_topic_options = rospy.get_param('~lidar_topic_options', [
+            {'topic': '/Multiespectral/ouster/range_image_cropped_sync', 'label': 'Range Image'},
+            {'topic': '/Multiespectral/ouster/reflec_image_cropped_sync', 'label': 'Reflectivity Image'},
+            {'topic': '/Multiespectral/ouster/signal_image_cropped_sync', 'label': 'Signal Image'},
+            {'topic': '/Multiespectral/ouster/nearir_image_cropped_sync', 'label': 'Near-IR Image'}
+        ])
         
         rospy.loginfo(f'[MultiespectralAcquireGui] GUI Title: "{gui_title}"')
         rospy.loginfo(f'[MultiespectralAcquireGui] Camera 1: "{camera1_display_name}" -> {camera1_topic}')
@@ -79,32 +90,64 @@ class RosMultiespectralAcquire(object):
         self.image_sub1 = rospy.Subscriber(camera1_topic, rospy.AnyMsg, self.camera1_image_cb, queue_size=1)
         self.image_sub2 = rospy.Subscriber(camera2_topic, rospy.AnyMsg, self.camera2_image_cb, queue_size=1)
         
+        # Start frequency counters immediately (not just when recording)
+        frame_rate_camera1.start()
+        frame_rate_camera2.start()
+        
         # LiDAR subscriber (optional - check if topic exists)
         self.lidar_sub = None
         self.current_lidar_topic = lidar_topic
         lidar_available = self._check_topic_exists(lidar_topic, timeout=2.0)
         if lidar_available:
             self.lidar_sub = rospy.Subscriber(lidar_topic, rospy.AnyMsg, self.lidar_image_cb, queue_size=1)
+            frame_rate_lidar.start()  # Start LIDAR counter if available
             rospy.loginfo(f"[MultiespectralAcquireGui] LiDAR topic '{lidar_topic}' found.")
         else:
             rospy.logwarn(f"[MultiespectralAcquireGui] LiDAR topic '{lidar_topic}' not found. LIDAR display disabled.")
         
         self.update_socketio_thread = threading.Thread(target=self.updateSocketio, daemon=True)
         self.update_socketio_thread.start()
-        self.socketio.on('image_size', self.update_image_size)
-        self.socketio.on('change_lidar_topic', self.change_lidar_topic)
         rospy.loginfo("[MultiespectralAcquireGui] Node initialized.")
 
     def _check_topic_exists(self, topic_name, timeout=2.0):
         """Check if a topic exists by looking at published topics"""
+        if not topic_name:
+            return False
         try:
             published_topics = rospy.get_published_topics()
             topic_names = [t[0] for t in published_topics]
             # Check both with and without leading slash
             full_topic = topic_name if topic_name.startswith('/') else '/' + rospy.get_namespace().strip('/') + '/' + topic_name
-            return topic_name in topic_names or full_topic in topic_names or any(topic_name in t for t in topic_names)
-        except:
+            exists = topic_name in topic_names or full_topic in topic_names or any(topic_name in t for t in topic_names)
+            return exists
+        except Exception as e:
+            rospy.logdebug(f"[_check_topic_exists] Error checking topic: {e}")
             return False
+    
+    def _recheck_lidar_availability(self):
+        """Periodically check if LIDAR topic becomes available or unavailable"""
+        global lidar_available
+        
+        if not self.current_lidar_topic:
+            return
+        
+        topic_exists = self._check_topic_exists(self.current_lidar_topic, timeout=0.5)
+        
+        # If topic exists but we're not subscribed, subscribe
+        if topic_exists and not lidar_available:
+            rospy.loginfo(f"[_recheck_lidar_availability] LIDAR topic '{self.current_lidar_topic}' now available!")
+            if self.lidar_sub is None:
+                self.lidar_sub = rospy.Subscriber(self.current_lidar_topic, rospy.AnyMsg, self.lidar_image_cb, queue_size=1)
+            lidar_available = True
+            frame_rate_lidar.start()
+        
+        # If topic doesn't exist but we think it's available, mark as unavailable
+        elif not topic_exists and lidar_available:
+            rospy.logwarn(f"[_recheck_lidar_availability] LIDAR topic '{self.current_lidar_topic}' no longer available.")
+            if self.lidar_sub is not None:
+                self.lidar_sub.unregister()
+                self.lidar_sub = None
+            lidar_available = False
 
     def stop(self):
         rospy.loginfo("[stop] Destructor.")
@@ -121,19 +164,7 @@ class RosMultiespectralAcquire(object):
         msg = Bool()
         msg.data = enabled
         self.recording_pub.publish(msg)
-        rospy.loginfo(f'[set_recording] Recording {"ENABLED" if enabled else "DISABLED"}')
-        
-        if enabled:
-            frame_rate_camera1.start()
-            frame_rate_camera2.start()
-            if lidar_available:
-                frame_rate_lidar.start()
-        else:
-            frame_rate_camera1.stop()
-            frame_rate_camera2.stop()
-            if lidar_available:
-                frame_rate_lidar.stop()
-        
+        rospy.loginfo(f'[set_recording] Recording {"ENABLED" if enabled else "DISABLED"}')        
         return True
 
     def toggle_recording(self):
@@ -151,48 +182,38 @@ class RosMultiespectralAcquire(object):
     def update_image_size(self, size_data):
         global image_size
         # Support both old naming (lwir/rgb/swir) and new generic naming (camera1/camera2/lidar)
+        # Convert to int explicitly for OpenCV compatibility
         if 'camera1' in size_data:
-            image_size['camera1'] = (size_data['camera1']['width'], size_data['camera1']['height'])
+            image_size['camera1'] = (int(size_data['camera1']['width']), int(size_data['camera1']['height']))
         elif 'lwir' in size_data:
-            image_size['camera1'] = (size_data['lwir']['width'], size_data['lwir']['height'])
+            image_size['camera1'] = (int(size_data['lwir']['width']), int(size_data['lwir']['height']))
             
         if 'camera2' in size_data:
-            image_size['camera2'] = (size_data['camera2']['width'], size_data['camera2']['height'])
+            image_size['camera2'] = (int(size_data['camera2']['width']), int(size_data['camera2']['height']))
         elif 'rgb' in size_data:
-            image_size['camera2'] = (size_data['rgb']['width'], size_data['rgb']['height'])
+            image_size['camera2'] = (int(size_data['rgb']['width']), int(size_data['rgb']['height']))
             
         if 'lidar' in size_data:
-            image_size['lidar'] = (size_data['lidar']['width'], size_data['lidar']['height'])
+            image_size['lidar'] = (int(size_data['lidar']['width']), int(size_data['lidar']['height']))
         elif 'swir' in size_data:
-            image_size['lidar'] = (size_data['swir']['width'], size_data['swir']['height'])
+            image_size['lidar'] = (int(size_data['swir']['width']), int(size_data['swir']['height']))
 
     def change_lidar_topic(self, data):
         """Change LIDAR subscription to a different topic"""
         global lidar_available
-        import sys
-        print("\n" + "="*80, file=sys.stderr)
-        print("[LIDAR TOPIC CHANGE] EVENTO RECIBIDO!", file=sys.stderr)
-        print(f"[LIDAR TOPIC CHANGE] Data received: {data}", file=sys.stderr)
-        print("="*80 + "\n", file=sys.stderr)
-        sys.stderr.flush()
         
         new_topic = data.get('topic', '')
-        
         if not new_topic:
-            print("[LIDAR TOPIC CHANGE] ERROR: No topic specified", file=sys.stderr)
-            sys.stderr.flush()
             rospy.logwarn("[change_lidar_topic] No topic specified")
             return
         
-        print(f"[LIDAR TOPIC CHANGE] Changing from '{self.current_lidar_topic}' to '{new_topic}'", file=sys.stderr)
-        sys.stderr.flush()
-        rospy.loginfo(f"[change_lidar_topic] Request to change from '{self.current_lidar_topic}' to '{new_topic}'")
+        rospy.loginfo(f"[change_lidar_topic] Changing from '{self.current_lidar_topic}' to '{new_topic}'")
         
         # Unsubscribe from current topic
         if self.lidar_sub is not None:
             self.lidar_sub.unregister()
             self.lidar_sub = None
-            rospy.loginfo(f"[change_lidar_topic] Unsubscribed from {self.current_lidar_topic}")
+            rospy.sleep(0.1)
         
         # Check if new topic exists
         topic_exists = self._check_topic_exists(new_topic, timeout=1.0)
@@ -202,22 +223,18 @@ class RosMultiespectralAcquire(object):
             self.lidar_sub = rospy.Subscriber(new_topic, rospy.AnyMsg, self.lidar_image_cb, queue_size=1)
             self.current_lidar_topic = new_topic
             lidar_available = True
-            rospy.loginfo(f"[change_lidar_topic] ✓ Successfully subscribed to {new_topic}")
+            frame_rate_lidar.start()
+            rospy.loginfo(f"[change_lidar_topic] Successfully subscribed to: {new_topic}")
         else:
+            self.current_lidar_topic = new_topic
             lidar_available = False
-            rospy.logwarn(f"[change_lidar_topic] ✗ Topic {new_topic} not found. Available topics:")
-            try:
-                published_topics = rospy.get_published_topics()
-                ouster_topics = [t[0] for t in published_topics if 'ouster' in t[0]]
-                for t in ouster_topics:
-                    rospy.logwarn(f"  - {t}")
-            except:
-                pass
+            rospy.logwarn(f"[change_lidar_topic] Topic {new_topic} not found. Will retry automatically.")
 
     def camera1_image_cb(self, msg):
         global camera1_img_path
         image = self.convert_image(msg)
         if image is not None:
+            rospy.loginfo_throttle(5.0, f"[camera1_image_cb] Converted image shape={image.shape}, dtype={image.dtype}, min={image.min()}, max={image.max()}")
             resized_image = cv2.resize(image, image_size['camera1'])
             _, camera1_buffer = cv2.imencode('.png', resized_image)
             camera1_img_path = base64.b64encode(camera1_buffer).decode('utf-8')
@@ -240,35 +257,49 @@ class RosMultiespectralAcquire(object):
         global lidar_img_path
         image = self.convert_image(msg)
         if image is not None:
+            # IMG correction to filter horizontal stripes (LIDAR-specific)
+            img_reflec = image.astype(np.float32)
+            mean_row = np.mean(img_reflec, axis=1, keepdims=True)  # Media de cada fila (canal)
+            img_clean = img_reflec.astype(float) - mean_row  # Resta el sesgo de calibración
+            img_normalized = np.clip((img_clean - img_clean.min()) / (img_clean.max() - img_clean.min()) * 255, 0, 255).astype(np.uint8)
+            img = img_normalized
             resized_image = cv2.resize(image, image_size['lidar'])
             _, lidar_buffer = cv2.imencode('.png', resized_image)
             lidar_img_path = base64.b64encode(lidar_buffer).decode('utf-8')
             frame_rate_lidar.tick()
+        else:
+            rospy.logwarn(f"[lidar_image_cb] Failed to convert LIDAR image from {self.current_lidar_topic}")
 
     def updateSocketio(self):
         prev_count_camera1 = 0
         prev_count_camera2 = 0
         prev_count_lidar = 0
+        recheck_cycle = 0
         
         while self._running and not rospy.is_shutdown():
+            # Re-check LIDAR availability every 5 seconds
+            recheck_cycle += 1
+            if recheck_cycle % 5 == 0:
+                self._recheck_lidar_availability()
+            
             current_count_camera1 = frame_rate_camera1.countItems()
             current_count_camera2 = frame_rate_camera2.countItems()
             current_count_lidar = frame_rate_lidar.countItems()
             
-            # Detect if images are actually being received (include LIDAR if available)
+            # Detect if images are being received
             images_flowing = (current_count_camera1 > prev_count_camera1) or (current_count_camera2 > prev_count_camera2)
             if lidar_available:
                 images_flowing = images_flowing or (current_count_lidar > prev_count_lidar)
             
             # Determine system status
             if recording_enabled and images_flowing:
-                status = 'RECORDING'  # Actually recording
+                status = 'RECORDING'
             elif recording_enabled and not images_flowing:
-                status = 'RECORDING REQUESTED'  # Waiting for data
+                status = 'RECORDING REQUESTED'
             elif not recording_enabled and images_flowing:
-                status = 'STOP REQUESTED'  # Data still arriving after stop
+                status = 'STOP REQUESTED'
             else:
-                status = 'IDLE'  # Not recording and no data
+                status = 'IDLE'
             
             data = {
                 'total_images_received_camera1': current_count_camera1,
@@ -284,6 +315,8 @@ class RosMultiespectralAcquire(object):
                 'camera2_name': camera2_display_name,
                 'lidar_name': lidar_display_name,
                 'gui_title': gui_title,
+                'lidar_topic_options': lidar_topic_options,
+                'current_lidar_topic': self.current_lidar_topic,
             }
             if lidar_available:
                 data['total_images_received_lidar'] = current_count_lidar
@@ -328,13 +361,42 @@ class RosMultiespectralAcquire(object):
             # Now convert the image
             if hasattr(ros_image, 'data') and isinstance(ros_image, Image):
                 rospy.logdebug(f"[convert_image] Image as {ros_image.encoding = }")
+                
+                # Handle different encodings
                 if ros_image.encoding == "mono8":
                     cv_image = bridge.imgmsg_to_cv2(ros_image, "mono8")
+                elif ros_image.encoding == "mono16":
+                    # Convert 16-bit to 8-bit for display (normalize to 0-255)
+                    cv_image_16 = bridge.imgmsg_to_cv2(ros_image, "mono16")
+                    # Normalize to 0-255 range for better visualization
+                    cv_image = cv2.normalize(cv_image_16, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
                 elif ros_image.encoding == "bgr8":
                     cv_image = bridge.imgmsg_to_cv2(ros_image, "bgr8")
+                elif ros_image.encoding == "rgb8":
+                    cv_image = bridge.imgmsg_to_cv2(ros_image, "rgb8")
+                    cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGB2BGR)
+                elif ros_image.encoding in ["32FC1", "32FC2", "32FC3"]:
+                    # Float images (e.g., depth, range)
+                    cv_image_float = bridge.imgmsg_to_cv2(ros_image, ros_image.encoding)
+                    # Normalize float to 0-255 range
+                    cv_image = cv2.normalize(cv_image_float, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+                    if len(cv_image_float.shape) == 2:  # Single channel
+                        pass  # Already grayscale
+                    elif cv_image_float.shape[2] == 1:
+                        cv_image = cv_image[:, :, 0]  # Extract single channel
                 else:
-                    rospy.logwarn(f"[convert_image] Unexpected image encoding: {ros_image.encoding}. Defaulting to 'bgr8'.")
-                    cv_image = bridge.imgmsg_to_cv2(ros_image, "bgr8")
+                    rospy.logwarn(f"[convert_image] Unexpected image encoding: {ros_image.encoding}. Attempting automatic conversion...")
+                    try:
+                        # Try passthrough conversion
+                        cv_image = bridge.imgmsg_to_cv2(ros_image, desired_encoding="passthrough")
+                        # If it's multi-channel or 16-bit, convert to displayable format
+                        if len(cv_image.shape) > 2 and cv_image.shape[2] > 1:
+                            cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY) if cv_image.shape[2] == 3 else cv_image[:,:,0]
+                        if cv_image.dtype == np.uint16 or cv_image.dtype == np.float32:
+                            cv_image = cv2.normalize(cv_image, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+                    except Exception as e:
+                        rospy.logerr(f"[convert_image] Failed to convert image with encoding {ros_image.encoding}: {e}")
+                        return None
                 return cv_image
             elif isinstance(ros_image, CompressedImage):
                 np_arr = np.frombuffer(ros_image.data, np.uint8)
