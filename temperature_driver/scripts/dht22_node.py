@@ -70,7 +70,7 @@ def parse_sensor_data(line):
 
 class DHT22Node:
     def __init__(self):
-        rospy.init_node('dht22_node', anonymous=False)
+        rospy.init_node('dht22', anonymous=False)
         
         # Parameters
         self.port = rospy.get_param('~port', '')  # Empty = auto-detect

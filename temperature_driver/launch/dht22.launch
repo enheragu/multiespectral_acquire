@@ -2,7 +2,7 @@
     <!-- DHT22 Temperature/Humidity sensor node -->
     
     <!-- Serial port (leave empty for auto-detection) -->
-    <arg name="port" default="" />
+    <arg name="port" default="$(env DHT22_PORT)" />
     
     <!-- Baudrate (74880 is ESP8266 default) -->
     <arg name="baudrate" default="74880" />
@@ -10,7 +10,7 @@
     <!-- TF frame for the sensor -->
     <arg name="frame_id" default="dht22_link" />
     
-    <node name="dht22_node" pkg="temperature_driver" type="dht22_node.py" output="screen">
+    <node name="dht22" pkg="temperature_driver" type="dht22_node.py" output="screen">
         <param name="port" value="$(arg port)" />
         <param name="baudrate" value="$(arg baudrate)" />
         <param name="frame_id" value="$(arg frame_id)" />
