@@ -68,6 +68,7 @@ class GenericBufferHandler:
         self.handler_type = rospy.get_param('~handler_type', 'generic')
         self.data_topic = rospy.get_param('~data_topic')
         self.master_topic = rospy.get_param('~master_topic', '')
+        self.store_data = rospy.get_param('~store_data', True)
         
         # Auto-detect store_all: if no master_topic, store everything
         if not self.master_topic:
@@ -99,7 +100,11 @@ class GenericBufferHandler:
         rospy.loginfo(f"[BufferHandler::{self.data_topic}] Storage path: {self.storage_path}")
         rospy.loginfo(f"[BufferHandler::{self.data_topic}] Handler type: {self.handler_type}")
         rospy.loginfo(f"[BufferHandler::{self.data_topic}] Mode: {'STORE ALL' if self.store_all else f'Master-triggered (max_diff={self.max_time_diff}s)'}")
-        rospy.loginfo(f"[BufferHandler::{self.data_topic}] Recording: DISABLED (waiting for /Multiespectral/recording_enabled topic)")
+        
+        if self.store_data:
+            rospy.loginfo(f"[BufferHandler::{self.data_topic}] Storage: ENABLED (waiting for /Multiespectral/recording_enabled)")
+        else:
+            rospy.loginfo(f"[BufferHandler::{self.data_topic}] Storage: DISABLED (sync-only mode)")
         
         # Buffer
         self.buffer = TimedBuffer()
@@ -156,34 +161,25 @@ class GenericBufferHandler:
     
     def recording_control_callback(self, msg):
         """Callback for centralized recording enable/disable"""
-        if self.recording_enabled != msg.data:
-            self.recording_enabled = msg.data
-            
-            if msg.data:
-                # Recording enabled: create storage folder if not created yet
-                if not self.storage_path_created:
-                    try:
-                        Path(self.storage_path).mkdir(parents=True, exist_ok=True)
-                        self.storage_path_created = True
-                        rospy.loginfo(f"[BufferHandler::{self.data_topic}] Created storage folder: {self.storage_path}")
-                    except Exception as e:
-                        rospy.logerr(f"[BufferHandler::{self.data_topic}] Failed to create storage folder: {e}")
-                        self.recording_enabled = False
-                        return
-                rospy.loginfo(f"[BufferHandler::{self.data_topic}] Recording ENABLED → storing to: {self.storage_path}")
-            else:
-                # Recording disabled
-                rospy.loginfo(f"[BufferHandler::{self.data_topic}] Recording DISABLED")
-    
-    def data_callback(self, msg_raw):
-        """Callback for master trigger"""
-        if not self.recording_enabled:
-            return
-        
-        # Check storage path is ready
-        if not self.storage_path_created:
-            rospy.logwarn_throttle(5.0, "[BufferHandler::{self.data_topic}] Recording enabled but storage path not created yet")
-            return
+        if self.store_data:
+            if self.recording_enabled != msg.data:
+                self.recording_enabled = msg.data
+                
+                if msg.data:
+                    # Recording enabled: create storage folder if not created yet
+                    if not self.storage_path_created:
+                        try:
+                            Path(self.storage_path).mkdir(parents=True, exist_ok=True)
+                            self.storage_path_created = True
+                            rospy.loginfo(f"[BufferHandler::{self.data_topic}] Created storage folder: {self.storage_path}")
+                        except Exception as e:
+                            rospy.logerr(f"[BufferHandler::{self.data_topic}] Failed to create storage folder: {e}")
+                            self.recording_enabled = False
+                            return
+                    rospy.loginfo(f"[BufferHandler::{self.data_topic}] Recording ENABLED → storing to: {self.storage_path}")
+                else:
+                    # Recording disabled
+                    rospy.loginfo(f"[BufferHandler::{self.data_topic}] Recording DISABLED")
     
     def _initialize_sync_publisher(self, msg_raw):
         """Initialize the sync publisher with the correct message type on first message"""
@@ -253,9 +249,9 @@ class GenericBufferHandler:
                     rospy.logwarn_throttle(10.0, f"[BufferHandler::{self.data_topic}] Failed to republish: {e}")
             
             # Store to disk only if recording enabled
-            if self.recording_enabled:
+            if self.recording_enabled and self.store_data:
                 if not self.storage_path_created:
-                    rospy.logwarn_throttfle(5.0, f"[BufferHandler::{self.data_topic}] Recording enabled but storage path not created yet")
+                    rospy.logwarn_throttle(5.0, f"[BufferHandler::{self.data_topic}] Recording enabled but storage path not created yet")
                     return
                 base_name = msg.metadata.img_name
                 self.store_message(msg, base_name)
@@ -331,8 +327,8 @@ class GenericBufferHandler:
             except Exception as e:
                 rospy.logdebug(f"[BufferHandler::{self.data_topic}] Could not republish sync message: {e}")
         
-        # Store to disk only if recording enabled
-        if self.recording_enabled:
+        # Store to disk only if recording enabled AND store_data is true
+        if self.recording_enabled and self.store_data:
             if not self.storage_path_created:
                 rospy.logwarn_throttle(5.0, "[BufferHandler::{self.data_topic}] Recording enabled but storage path not created yet")
                 return

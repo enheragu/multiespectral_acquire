@@ -28,6 +28,8 @@
   <arg name="fov_v_min_deg" default="-12"/>
   <arg name="fov_v_max_deg" default="11"/>
 
+  <include file="$(find temperature_driver)/launch/dht22.launch"/>
+  
   <group ns="Multiespectral">
     <!-- ====== CAMERA HANDLERS (only publish images) ====== -->
     
@@ -66,9 +68,6 @@
       <arg name="output_path" value="$(arg output_path)"/>
       <arg name="master_topic" value="$(arg master_topic)"/>
       <arg name="ouster_exposure_ns" value="$(arg ouster_exposure_ns)"/>
-    </include>
-
-    <include file="$(find temperature_driver)/launch/dht22.launch"/>
-    
+    </include>    
   </group>
 </launch>

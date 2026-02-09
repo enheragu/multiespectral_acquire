@@ -9,4 +9,4 @@ echo ""
 
 roslaunch multiespectral_acquire fisheye_launch.launch \
     session_folder:="$SESSION_FOLDER" \
-    "$@"
+    "$@" --wait

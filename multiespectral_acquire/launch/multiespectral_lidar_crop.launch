@@ -7,11 +7,16 @@
   <arg name="fov_v_min_deg" default="-15"/>
   <arg name="fov_v_max_deg" default="15"/>
 
+  <!-- ========================================================================== -->
+  <!-- CROP NODES: Process _sync topics from buffer handlers -->
+  <!-- Input: /ouster/*_sync (synchronized ~5Hz) -->
+  <!-- Output: ouster/*_cropped (goes to store buffers) -->
+  <!-- ========================================================================== -->
+
   <!-- PointCloud Crop Node -->
   <node pkg="multiespectral_acquire" type="pointcloud_crop_node" name="pointcloud_crop" output="screen">
-    <remap from="ouster/points" to="/ouster/points"/>
-    <remap from="/ouster/points_cropped" to="ouster/points_cropped"/>
-    <param name="input_topic" value="/ouster/points"/>
+    <param name="input_topic" value="/ouster/points_sync"/>
+    <remap from="ouster/points_cropped" to="ouster/points_cropped"/>
     
     <param name="fov_enabled" value="$(arg fov_enabled)"/>
     <param name="fov_use_angular" value="$(arg fov_use_angular)"/>
@@ -23,9 +28,8 @@
 
   <!-- Range Image Crop Node -->
   <node pkg="multiespectral_acquire" type="image_crop_node" name="range_image_crop" output="screen">
-    <remap from="ouster/range_image" to="/ouster/range_image"/>
-    <remap from="/ouster/range_image_cropped" to="ouster/range_image_cropped"/>
-    <param name="input_topic" value="/ouster/range_image"/>
+    <param name="input_topic" value="/ouster/range_image_sync"/>
+    <remap from="ouster/range_image_cropped" to="ouster/range_image_cropped"/>
     
     <param name="fov_enabled" value="$(arg fov_enabled)"/>
     <param name="fov_use_angular" value="$(arg fov_use_angular)"/>
@@ -37,9 +41,8 @@
 
   <!-- Reflectivity Image Crop Node -->
   <node pkg="multiespectral_acquire" type="image_crop_node" name="reflec_image_crop" output="screen">
-    <remap from="ouster/reflec_image" to="/ouster/reflec_image"/>
-    <remap from="/ouster/reflec_image_cropped" to="ouster/reflec_image_cropped"/>
-    <param name="input_topic" value="/ouster/reflec_image"/>
+    <param name="input_topic" value="/ouster/reflec_image_sync"/>
+    <remap from="ouster/reflec_image_cropped" to="ouster/reflec_image_cropped"/>
     
     <param name="fov_enabled" value="$(arg fov_enabled)"/>
     <param name="fov_use_angular" value="$(arg fov_use_angular)"/>
@@ -51,9 +54,8 @@
 
   <!-- Signal Image Crop Node -->
   <node pkg="multiespectral_acquire" type="image_crop_node" name="signal_image_crop" output="screen">
-    <remap from="ouster/signal_image" to="/ouster/signal_image"/>
-    <remap from="/ouster/signal_image_cropped" to="ouster/signal_image_cropped"/>
-    <param name="input_topic" value="/ouster/signal_image"/>
+    <param name="input_topic" value="/ouster/signal_image_sync"/>
+    <remap from="ouster/signal_image_cropped" to="ouster/signal_image_cropped"/>
     
     <param name="fov_enabled" value="$(arg fov_enabled)"/>
     <param name="fov_use_angular" value="$(arg fov_use_angular)"/>
@@ -65,9 +67,8 @@
 
   <!-- Near-IR Image Crop Node -->
   <node pkg="multiespectral_acquire" type="image_crop_node" name="nearir_image_crop" output="screen">
-    <remap from="ouster/nearir_image" to="/ouster/nearir_image"/>
-    <remap from="/ouster/nearir_image_cropped" to="ouster/nearir_image_cropped"/>
-    <param name="input_topic" value="/ouster/nearir_image"/>
+    <param name="input_topic" value="/ouster/nearir_image_sync"/>
+    <remap from="ouster/nearir_image_cropped" to="ouster/nearir_image_cropped"/>
     
     <param name="fov_enabled" value="$(arg fov_enabled)"/>
     <param name="fov_use_angular" value="$(arg fov_use_angular)"/>

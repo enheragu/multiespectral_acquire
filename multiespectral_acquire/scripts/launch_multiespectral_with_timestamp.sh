@@ -13,4 +13,4 @@ echo ""
 
 roslaunch multiespectral_acquire multiespectral_launch.launch \
     session_folder:="$SESSION_FOLDER" \
-    "$@"
+    "$@" --wait

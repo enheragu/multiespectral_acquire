@@ -3,8 +3,8 @@
     <arg name="dataset_output_path" default="/media/administrator/data/images_eeha"/>
     <arg name="output_path" default="$(arg dataset_output_path)/pr_$(arg session_folder)"/>
 
-    <arg name="output_frame_rate" default="0.25"/>
-    <arg name="slave_fisheye_frame_rate" default="1"/>
+    <arg name="output_frame_rate" default="0.33"/>
+    <arg name="slave_fisheye_frame_rate" default="2"/>
     
     <!-- Use exposure time for syncronization between different sensors in the middle of 
         the exposure -->
@@ -33,6 +33,14 @@
             <arg name="master_topic" value="frontal_camera/image_with_metadata"/>
             <arg name="ouster_exposure_ns" value="$(arg ouster_exposure_ns)"/>
         </include>
+
+        <node pkg="corrected_image" type="corrected_image.py" name="corrected_image_frontal" output="screen">
+            <param name="image_topic" value="frontal_camera"/>
+        </node>
+
+        <node pkg="corrected_image" type="corrected_image.py" name="corrected_image_rear" output="screen">
+            <param name="image_topic" value="rear_camera"/>
+        </node>
     </group>
 </launch>
 

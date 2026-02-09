@@ -88,8 +88,8 @@ bool CameraAdapter::grabImage(cv::Mat& curr_image, ImageMetadata& metadata)
     bool result =  acquireImage(curr_image, metadata);
 
     std::ostringstream oss;
-    oss << std::setfill('0') << std::setw(6) << this->captured_images;
-    metadata.img_name = getType() + "_" + oss.str();
+    oss << std::setfill('0') << std::setw(7) << this->captured_images;
+    metadata.img_name = oss.str();
     this->captured_images++;
 
     logger_->debug_stream() << "[CameraAdapter::grabImage] Aquired image.";

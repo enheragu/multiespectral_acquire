@@ -8,7 +8,7 @@
   <arg name="gnss_topic" default="/gnss/fix"/>
   <arg name="odom_topic" default="/odometry/combined"/>
 
-  <arg name="max_time_diff_ouster" value="0.15"/>
+  <arg name="max_time_diff_ouster" value="0.25"/>
   
   <!-- NOTE: exposure_time_ns is NOT needed for ImageWithMetadata messages -->
   <!-- The buffer handler will automatically read exposure_time from msg.metadata.exposure_time -->

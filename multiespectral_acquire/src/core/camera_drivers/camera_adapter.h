@@ -38,7 +38,7 @@ protected:
     std::shared_ptr<Logger> logger_;
 
     long captured_images = 0;
-    int frame_rate = 5;
+    double frame_rate = 1.0;
 
     std::string img_path = "";
     std::mutex camera_mutex; // Avoid deinitialization while grabbing image
