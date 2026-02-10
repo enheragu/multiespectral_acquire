@@ -8,7 +8,7 @@
   <arg name="gnss_topic" default="/gnss/fix"/>
   <arg name="odom_topic" default="/odometry/combined"/>
 
-  <arg name="max_time_diff_ouster" value="0.25"/>
+  <arg name="max_time_diff_ouster" value="0.3"/>
   
   <!-- NOTE: For ImageWithMetadata messages, exposure_time is auto-detected from msg.metadata.exposure_time -->
   <!-- The exposure_time_ns parameter is only needed for non-ImageWithMetadata messages (e.g., Ouster) -->
@@ -48,6 +48,7 @@
     <param name="max_time_diff" value="$(arg max_time_diff_ouster)"/>
     <param name="exposure_time_ns" value="$(arg ouster_exposure_ns)"/>
     <param name="store_data" value="false"/>
+    <remap from="/ouster/range_image_sync" to="ouster/range_image_sync"/>
   </node>
 
   <!-- LIDAR Reflectivity Image: sync only -->
@@ -59,6 +60,7 @@
     <param name="max_time_diff" value="$(arg max_time_diff_ouster)"/>
     <param name="exposure_time_ns" value="$(arg ouster_exposure_ns)"/>
     <param name="store_data" value="false"/>
+    <remap from="/ouster/reflec_image_sync" to="ouster/reflec_image_sync"/>
   </node>
 
   <!-- LIDAR Signal Image: sync only -->
@@ -70,6 +72,7 @@
     <param name="max_time_diff" value="$(arg max_time_diff_ouster)"/>
     <param name="exposure_time_ns" value="$(arg ouster_exposure_ns)"/>
     <param name="store_data" value="false"/>
+    <remap from="/ouster/signal_image_sync" to="ouster/signal_image_sync"/>
   </node>
 
   <!-- LIDAR Near-IR Image: sync only -->
@@ -81,6 +84,7 @@
     <param name="max_time_diff" value="$(arg max_time_diff_ouster)"/>
     <param name="exposure_time_ns" value="$(arg ouster_exposure_ns)"/>
     <param name="store_data" value="false"/>
+    <remap from="/ouster/nearir_image_sync" to="ouster/nearir_image_sync"/>
   </node>
 
   <!-- PointCloud: sync only -->
@@ -92,46 +96,48 @@
     <param name="max_time_diff" value="$(arg max_time_diff_ouster)"/>
     <param name="exposure_time_ns" value="$(arg ouster_exposure_ns)"/>
     <param name="store_data" value="false"/>
+    <remap from="/ouster/points_sync" to="ouster/points_sync"/>
   </node>
 
   <!-- ========================================================================== -->
   <!-- LIDAR: Store buffers (cropped -> disk) -->
   <!-- These receive cropped data from crop nodes and store to disk -->
+  <!-- No master_topic = auto store_all mode -->
+  <!-- img_name is extracted from frame_id (set by buffer_sync, preserved by crop) -->
   <!-- ========================================================================== -->
 
   <!-- LIDAR Range Image cropped: store -->
   <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_range_store" output="screen">
     <param name="handler_type" value="simple_image"/>
-    <param name="data_topic" value="ouster/range_image_cropped"/>
+    <param name="data_topic" value="ouster/range_image_sync_cropped"/>
     <param name="output_path" value="$(arg output_path)/lidar_range"/>
-    <!-- No master = store_all mode -->
   </node>
 
   <!-- LIDAR Reflectivity Image cropped: store -->
   <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_reflec_store" output="screen">
     <param name="handler_type" value="simple_image"/>
-    <param name="data_topic" value="ouster/reflec_image_cropped"/>
+    <param name="data_topic" value="ouster/reflec_image_sync_cropped"/>
     <param name="output_path" value="$(arg output_path)/lidar_reflec"/>
   </node>
 
   <!-- LIDAR Signal Image cropped: store -->
   <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_signal_store" output="screen">
     <param name="handler_type" value="simple_image"/>
-    <param name="data_topic" value="ouster/signal_image_cropped"/>
+    <param name="data_topic" value="ouster/signal_image_sync_cropped"/>
     <param name="output_path" value="$(arg output_path)/lidar_signal"/>
   </node>
 
   <!-- LIDAR Near-IR Image cropped: store -->
   <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_nearir_store" output="screen">
     <param name="handler_type" value="simple_image"/>
-    <param name="data_topic" value="ouster/nearir_image_cropped"/>
+    <param name="data_topic" value="ouster/nearir_image_sync_cropped"/>
     <param name="output_path" value="$(arg output_path)/lidar_nearir"/>
   </node>
 
   <!-- PointCloud cropped: store -->
   <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_pointcloud_store" output="screen">
     <param name="handler_type" value="pointcloud"/>
-    <param name="data_topic" value="ouster/points_cropped"/>
+    <param name="data_topic" value="ouster/points_sync_cropped"/>
     <param name="output_path" value="$(arg output_path)/lidar_pointcloud"/>
   </node>
 

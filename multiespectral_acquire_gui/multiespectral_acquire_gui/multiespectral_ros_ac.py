@@ -50,7 +50,7 @@ class RosMultiespectralAcquire(object):
         # Read camera configuration from ROS parameters
         camera1_topic = rospy.get_param('~camera1_topic', '/Multiespectral/lwir_camera/image_with_metadata_sync')
         camera2_topic = rospy.get_param('~camera2_topic', '/Multiespectral/visible_camera/image_with_metadata_sync')
-        lidar_topic = rospy.get_param('~lidar_topic', '/Multiespectral/ouster/reflec_image_cropped_sync')
+        lidar_topic = rospy.get_param('~lidar_topic', '/Multiespectral/ouster/reflec_image_sync_cropped_sync')
         
         camera1_display_name = rospy.get_param('~camera1_name', 'Camera 1')
         camera2_display_name = rospy.get_param('~camera2_name', 'Camera 2')
@@ -58,10 +58,10 @@ class RosMultiespectralAcquire(object):
         
         # Read LIDAR topic options from ROS parameters
         lidar_topic_options = rospy.get_param('~lidar_topic_options', [
-            {'topic': '/Multiespectral/ouster/range_image_cropped_sync', 'label': 'Range Image'},
-            {'topic': '/Multiespectral/ouster/reflec_image_cropped_sync', 'label': 'Reflectivity Image'},
-            {'topic': '/Multiespectral/ouster/signal_image_cropped_sync', 'label': 'Signal Image'},
-            {'topic': '/Multiespectral/ouster/nearir_image_cropped_sync', 'label': 'Near-IR Image'}
+            {'topic': '/Multiespectral/ouster/range_image_sync_cropped_sync', 'label': 'Range Image'},
+            {'topic': '/Multiespectral/ouster/reflec_image_sync_cropped_sync', 'label': 'Reflectivity Image'},
+            {'topic': '/Multiespectral/ouster/signal_image_sync_cropped_sync', 'label': 'Signal Image'},
+            {'topic': '/Multiespectral/ouster/nearir_image_sync_cropped_sync', 'label': 'Near-IR Image'}
         ])
         
         rospy.loginfo(f'[MultiespectralAcquireGui] GUI Title: "{gui_title}"')
@@ -73,8 +73,9 @@ class RosMultiespectralAcquire(object):
         self.recording_pub = rospy.Publisher(recording_control_topic, Bool, queue_size=1, latch=True)
         rospy.loginfo(f'[MultiespectralAcquireGui] Publishing recording control to: {recording_control_topic}')
         
-        # Initialize recording as disabled
-        self.set_recording(False)
+        # Subscriber to sync recording state from other sources (other GUIs, etc.)
+        self.recording_sub = rospy.Subscriber(recording_control_topic, Bool, self._recording_status_cb, queue_size=1)
+        rospy.loginfo(f'[MultiespectralAcquireGui] Subscribed to recording control for sync: {recording_control_topic}')
 
         self._running = True
         
@@ -116,10 +117,30 @@ class RosMultiespectralAcquire(object):
         try:
             published_topics = rospy.get_published_topics()
             topic_names = [t[0] for t in published_topics]
-            # Check both with and without leading slash
-            full_topic = topic_name if topic_name.startswith('/') else '/' + rospy.get_namespace().strip('/') + '/' + topic_name
-            exists = topic_name in topic_names or full_topic in topic_names or any(topic_name in t for t in topic_names)
-            return exists
+            
+            # Normalize topic name (ensure it has leading slash)
+            normalized_topic = topic_name if topic_name.startswith('/') else '/' + topic_name
+            
+            # Direct match
+            if normalized_topic in topic_names:
+                return True
+            
+            # Check without namespace prefix if not found
+            # E.g., if topic is "ouster/reflec_image_sync_cropped" try with current namespace
+            if not topic_name.startswith('/'):
+                ns = rospy.get_namespace().rstrip('/')
+                full_topic = ns + '/' + topic_name if ns else '/' + topic_name
+                if full_topic in topic_names:
+                    return True
+            
+            # Partial match as last resort (topic might have different prefix)
+            base_topic = topic_name.split('/')[-1]  # Get last part
+            for t in topic_names:
+                if t.endswith('/' + base_topic):
+                    rospy.logdebug(f"[_check_topic_exists] Partial match: {topic_name} found as {t}")
+                    return True
+            
+            return False
         except Exception as e:
             rospy.logdebug(f"[_check_topic_exists] Error checking topic: {e}")
             return False
@@ -131,13 +152,21 @@ class RosMultiespectralAcquire(object):
         if not self.current_lidar_topic:
             return
         
-        topic_exists = self._check_topic_exists(self.current_lidar_topic, timeout=0.5)
+        # Check if topic has active publishers
+        try:
+            topic_exists = self._check_topic_exists(self.current_lidar_topic, timeout=0.5)
+        except Exception as e:
+            rospy.logwarn_throttle(10.0, f"[_recheck_lidar_availability] Error checking topic: {e}")
+            return
+        
+        rospy.loginfo_throttle(10.0, f"[_recheck_lidar_availability] '{self.current_lidar_topic}': exists={topic_exists}, available={lidar_available}")
         
         # If topic exists but we're not subscribed, subscribe
         if topic_exists and not lidar_available:
-            rospy.loginfo(f"[_recheck_lidar_availability] LIDAR topic '{self.current_lidar_topic}' now available!")
-            if self.lidar_sub is None:
-                self.lidar_sub = rospy.Subscriber(self.current_lidar_topic, rospy.AnyMsg, self.lidar_image_cb, queue_size=1)
+            rospy.loginfo(f"[_recheck_lidar_availability] LIDAR topic '{self.current_lidar_topic}' now available! Subscribing...")
+            if self.lidar_sub is not None:
+                self.lidar_sub.unregister()
+            self.lidar_sub = rospy.Subscriber(self.current_lidar_topic, rospy.AnyMsg, self.lidar_image_cb, queue_size=1)
             lidar_available = True
             frame_rate_lidar.start()
         
@@ -166,6 +195,13 @@ class RosMultiespectralAcquire(object):
         self.recording_pub.publish(msg)
         rospy.loginfo(f'[set_recording] Recording {"ENABLED" if enabled else "DISABLED"}')        
         return True
+
+    def _recording_status_cb(self, msg):
+        """Callback to sync recording state from other sources (other GUIs, command line, etc.)"""
+        global recording_enabled
+        if msg.data != recording_enabled:
+            recording_enabled = msg.data
+            rospy.loginfo(f'[_recording_status_cb] Recording state synced from external source: {"ENABLED" if msg.data else "DISABLED"}')
 
     def toggle_recording(self):
         """Toggle recording state"""

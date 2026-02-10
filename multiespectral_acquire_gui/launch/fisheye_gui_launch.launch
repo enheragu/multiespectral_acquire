@@ -17,7 +17,7 @@
   
   <!-- LIDAR configuration -->
   <arg name="lidar_topic" default="/ouster/image3d_low_rate" />
-  <arg name="lidar_name" default="LIDAR Image" />
+  <arg name="lidar_name" default="LIDAR" />
   
   <group ns="Fisheye">
     <node pkg="multiespectral_acquire_gui" type="multiespectral_control.py" name="fisheye_acquire_gui" output="screen">

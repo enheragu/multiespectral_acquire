@@ -126,9 +126,8 @@ class GenericBufferHandler:
         self.resolved_topic = self.data_sub.resolved_name
         rospy.loginfo(f"[BufferHandler::{self.data_topic}] Resolved to: {self.resolved_topic}")
         
-        # Subscribe to master if needed
-        if not self.store_all and self.master_topic:
-            # Import ImageWithMetadata dynamically
+        # Subscribe to master if needed (for sync mode only)
+        if self.master_topic and not self.store_all:
             try:
                 from multiespectral_acquire.msg import ImageWithMetadata
                 self.master_sub = rospy.Subscriber(self.master_topic, ImageWithMetadata, self.master_callback)
@@ -253,7 +252,34 @@ class GenericBufferHandler:
                 if not self.storage_path_created:
                     rospy.logwarn_throttle(5.0, f"[BufferHandler::{self.data_topic}] Recording enabled but storage path not created yet")
                     return
-                base_name = msg.metadata.img_name
+                
+                # Determine base_name - priority order:
+                # 1. frame_id (embedded by buffer_sync in the pipeline)
+                # 2. metadata.img_name (ImageWithMetadata messages)
+                # 3. timestamp fallback
+                base_name = None
+                
+                # Try frame_id first (used for sync→crop→store pipeline)
+                if hasattr(msg, 'header') and msg.header.frame_id:
+                    # frame_id should contain the img_name if set by buffer_sync
+                    frame_id = msg.header.frame_id
+                    # Validate it looks like a proper name (not a TF frame like "ouster")
+                    if frame_id and not frame_id.startswith(('base_', 'ouster', 'map', 'world')):
+                        base_name = frame_id
+                
+                # Try metadata.img_name (ImageWithMetadata)
+                if base_name is None and hasattr(msg, 'metadata') and hasattr(msg.metadata, 'img_name'):
+                    base_name = msg.metadata.img_name
+                
+                # Fallback to timestamp
+                if base_name is None:
+                    if hasattr(msg, 'header') and msg.header.stamp.to_nsec() > 0:
+                        ts_nsec = msg.header.stamp.to_nsec()
+                    else:
+                        ts_nsec = timestamp
+                    base_name = f"{ts_nsec}"
+                    rospy.logdebug_throttle(10.0, f"[BufferHandler::{self.data_topic}] Using timestamp as filename")
+                
                 self.store_message(msg, base_name)
         else:
             # Buffer mode: always buffer for potential sync
@@ -323,6 +349,12 @@ class GenericBufferHandler:
                 # Deserialize the message properly
                 msg_class = self._get_message_class(closest['data']._connection_header['type'])
                 msg_deserialized = msg_class().deserialize(closest['data']._buff)
+                
+                # Embed img_name in frame_id so downstream nodes can use it
+                # This allows the name to travel through the pipeline (sync→crop→store)
+                if hasattr(msg_deserialized, 'header'):
+                    msg_deserialized.header.frame_id = base_name
+                
                 self.sync_pub.publish(msg_deserialized)
             except Exception as e:
                 rospy.logdebug(f"[BufferHandler::{self.data_topic}] Could not republish sync message: {e}")

@@ -23,9 +23,9 @@
   <!-- FOV Basler aca1600-60gc with lens ~ 25.4° x 19.2° -->
   <arg name="fov_enabled" default="true"/>
   <arg name="fov_use_angular" default="true"/>
-  <arg name="fov_h_min_deg" default="-15"/>
-  <arg name="fov_h_max_deg" default="15"/>
-  <arg name="fov_v_min_deg" default="-12"/>
+  <arg name="fov_h_min_deg" default="-8.5"/>
+  <arg name="fov_h_max_deg" default="19"/>
+  <arg name="fov_v_min_deg" default="-11.5"/>
   <arg name="fov_v_max_deg" default="11"/>
 
   <include file="$(find temperature_driver)/launch/dht22.launch"/>
