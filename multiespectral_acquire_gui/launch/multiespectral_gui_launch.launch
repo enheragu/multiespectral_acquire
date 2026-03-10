@@ -14,7 +14,7 @@
   <arg name="camera2_name" default="Visible Camera" />
   
   <!-- LIDAR configuration -->
-  <arg name="lidar_topic" default="/Multiespectral/ouster/reflec_image_sync_cropped" />
+  <arg name="lidar_topic" default="/Multiespectral/ouster/reflec_image_cropped_sync" />
   <arg name="lidar_name" default="LIDAR Image" />
   
   <group ns="Multiespectral">
@@ -32,12 +32,12 @@
       <param name="lidar_name" value="$(arg lidar_name)" />
       
       <!-- LIDAR topic options for dropdown selector -->
-      <!-- Topics from crop nodes: ouster/*_sync_cropped -->
+      <!-- Format: list of dicts with 'topic' and 'label' keys -->
       <rosparam param="lidar_topic_options">
-        - {topic: '/Multiespectral/ouster/range_image_sync_cropped', label: 'Range Image'}
-        - {topic: '/Multiespectral/ouster/reflec_image_sync_cropped', label: 'Reflectivity Image'}
-        - {topic: '/Multiespectral/ouster/signal_image_sync_cropped', label: 'Signal Image'}
-        - {topic: '/Multiespectral/ouster/nearir_image_sync_cropped', label: 'Near-IR Image'}
+        - {topic: '/Multiespectral/ouster/range_image_sync_cropped_sync', label: 'Range Image'}
+        - {topic: '/Multiespectral/ouster/reflec_image_sync_cropped_sync', label: 'Reflectivity Image'}
+        - {topic: '/Multiespectral/ouster/signal_image_sync_cropped_sync', label: 'Signal Image'}
+        - {topic: '/Multiespectral/ouster/nearir_image_sync_cropped_sync', label: 'Near-IR Image'}
       </rosparam>
     </node>
   </group>

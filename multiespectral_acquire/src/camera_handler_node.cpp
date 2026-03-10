@@ -52,7 +52,7 @@ public:
         this->setLogger(std::make_shared<RosLogger>());
         
         pnh_.param<std::string>("image_topic", topic_name_, getType() + "_image");
-        pnh_.param<double>("output_frame_rate", frame_rate, 5.0);
+        pnh_.param<double>("output_frame_rate", frame_rate, 1.0);
         pnh_.param<std::string>("camera_ip", camera_ip, "");
         pnh_.param<std::string>("camera_info_url", camera_info_cfg_, "");
         

@@ -57,7 +57,7 @@ bool force_disable_ptp = false;  // Set true to force manual calibration even if
 // Global variable to store calibration
 TimestampCalibration g_calibration;
 
-std::string FLIR_IP = "169.254.165.138";
+std::string FLIR_IP = "192.168.4.6";
 
 /**
  * @brief Set the display name for the camera (typically the ROS node name)
@@ -124,25 +124,29 @@ TimestampCalibration calibrateTimestamps(int num_samples = 30) {
     std::cout << "[FlirAdapter::calibrateTimestamps] Capturing " << num_samples << " samples for calibration..." << std::endl;
     
     for(int i = 0; i < num_samples; i++) {
-        auto pc_start = std::chrono::system_clock::now();
-        
-        // Trigger + capture
-        pFlir->TriggerSoftware.Execute();
-        Spinnaker::ImagePtr pResultImage = pFlir->GetNextImage(5000);
-        
-        if(!pResultImage->IsIncomplete()) {
-            int64_t cam_ns = pResultImage->GetTimeStamp();
-            auto pc_end = std::chrono::system_clock::now();
+        try {
+            auto pc_start = std::chrono::system_clock::now();
             
-            // Average PC time (reduce jitter)
-            int64_t pc_ns = (pc_start.time_since_epoch().count() + 
-                           pc_end.time_since_epoch().count()) / 2;
+            // Trigger + capture
+            pFlir->TriggerSoftware.Execute();
+            Spinnaker::ImagePtr pResultImage = pFlir->GetNextImage(5000);
             
-            camera_times.push_back(cam_ns);
-            pc_times.push_back(pc_ns);
+            if(!pResultImage->IsIncomplete()) {
+                int64_t cam_ns = pResultImage->GetTimeStamp();
+                auto pc_end = std::chrono::system_clock::now();
+                
+                // Average PC time (reduce jitter)
+                int64_t pc_ns = (pc_start.time_since_epoch().count() + 
+                               pc_end.time_since_epoch().count()) / 2;
+                
+                camera_times.push_back(cam_ns);
+                pc_times.push_back(pc_ns);
+            }
+            
+            pResultImage->Release();
+        } catch (Spinnaker::Exception& e) {
+            std::cerr << "[FlirAdapter::calibrateTimestamps] Capture failed at sample " << i << ": " << e.what() << std::endl;
         }
-        
-        pResultImage->Release();
         
         // Space out samples (except the last one)
         if(i < num_samples - 1) {
@@ -277,6 +281,19 @@ bool initCamera(int frame_rate, std::string camera_ip)
         CHECK_POINTER(pFlir);
         pFlir->Init();
 
+        // Force-stop acquisition in case camera was left streaming by a crashed process.
+        // IsStreaming() only reflects SDK state, not hardware state after SIGKILL,
+        // so we unconditionally try EndAcquisition and ignore the exception if not streaming.
+        // Then DeInit+Init to fully reset hardware state.
+        try {
+            pFlir->EndAcquisition();
+            std::cout << "[FlirAdapter::initCamera] Camera was still streaming from previous session. Stopped." << std::endl;
+        } catch (Spinnaker::Exception&) {
+            // Not streaming — expected path on clean startup
+        }
+        pFlir->DeInit();
+        pFlir->Init();
+
         // Continuous Acquisition
         // CHECK_ARW(pFlir->AcquisitionMode);
         // pFlir->AcquisitionMode.SetValue(Spinnaker::AcquisitionMode_Continuous);
@@ -376,10 +393,10 @@ bool beginAcquisition()
         std::cout << "[FlirAdapter::beginAcquisition] Acquisition already started." << std::endl;
     }
     
-    // Timestamp calibration initialization if PTP not available
+    // Software timestamp calibration if PTP not available
     if (!ptp_supported)
     {
-        g_calibration = calibrateTimestamps(60);
+        g_calibration = calibrateTimestamps(30);
     }
     
     return true;
@@ -538,16 +555,12 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
             auto timestamp_nanoseconds = convertedImage->GetTimeStamp();
             metadata.camera_timestamp = static_cast<uint64_t>(timestamp_nanoseconds);
             
-            // Apply calibration if PTP not available
-            if (!ptp_supported) {
-                metadata.camera_timestamp = g_calibration.offset_ns + 
-                                           timestamp_nanoseconds * g_calibration.slope;
-            }
-            
-            // Update calibration with this new sample
+            // Apply software calibration if PTP not available
             if (!ptp_supported) {
                 int64_t pc_ns = (pc_start.time_since_epoch().count() + 
                                pc_end.time_since_epoch().count()) / 2;
+                metadata.camera_timestamp = g_calibration.offset_ns + 
+                                           timestamp_nanoseconds * g_calibration.slope;
                 g_calibration.updateWithSample(timestamp_nanoseconds, pc_ns, 1000000000LL);
             }
             

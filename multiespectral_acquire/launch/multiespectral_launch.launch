@@ -28,7 +28,7 @@
   <arg name="fov_v_min_deg" default="-11.5"/>
   <arg name="fov_v_max_deg" default="11"/>
 
-  <include file="$(find temperature_driver)/launch/dht22.launch"/>
+  <!-- <include file="$(find temperature_driver)/launch/dht22.launch"/> -->
   
   <group ns="Multiespectral">
     <!-- ====== CAMERA HANDLERS (only publish images) ====== -->

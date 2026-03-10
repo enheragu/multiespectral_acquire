@@ -82,8 +82,8 @@ public:
         bool is_systematic_drift = false;
         if (recent_errors_ms->size() >= 10) {
             double error_trend = getErrorTrend();
-            // If error is growing by more than 5ms per sample consistently, it's systematic drift
-            if (std::abs(error_trend) > 5.0) {
+            // If error is growing by more than 2ms per sample consistently, it's systematic drift
+            if (std::abs(error_trend) > 2.0) {
                 is_systematic_drift = true;
             }
         }
@@ -102,8 +102,8 @@ public:
             offset_ns += alpha_offset * error_ns;
             samples_count++;
             
-            // Recalculate slope more frequently when drift is detected
-            int recalc_interval = is_systematic_drift ? 10 : 25;
+            // Recalculate slope more frequently when drift is detected or during early convergence
+            int recalc_interval = (is_systematic_drift || samples_count <= 100) ? 10 : 25;
             if (samples_count % recalc_interval == 0 && recent_samples->size() >= 10) {
                 recalculateSlope(is_systematic_drift);
             }
@@ -130,6 +130,46 @@ public:
                     std::cout << " [" << consecutive_anomalies << " consecutive]";
                 }
                 std::cout << std::endl;
+            }
+            
+            // Detect clock step: 3+ consecutive anomalies with same error sign
+            // This happens when NTP/chrony adjusts the system clock suddenly
+            if (consecutive_anomalies >= 3 && recent_errors_ms->size() >= 3) {
+                int check_count = std::min((size_t)consecutive_anomalies, recent_errors_ms->size());
+                check_count = std::min(check_count, 5);
+                
+                bool all_same_sign = true;
+                double ref_sign = (recent_errors_ms->back() > 0) ? 1.0 : -1.0;
+                auto it = recent_errors_ms->end();
+                std::advance(it, -check_count);
+                for (int i = 0; i < check_count; ++i, ++it) {
+                    if ((*it > 0 ? 1.0 : -1.0) != ref_sign) {
+                        all_same_sign = false;
+                        break;
+                    }
+                }
+                
+                if (all_same_sign) {
+                    std::cout << "[" << camera_name << "::TimestampCalibration] Clock step detected ("
+                              << consecutive_anomalies << " consecutive anomalies, error: " 
+                              << error_ms << " ms). Adjusting offset immediately." << std::endl;
+                    
+                    // Apply direct offset correction (80% to avoid overcorrection)
+                    offset_ns += 0.8 * error_ns;
+                    
+                    // Add sample for future slope recalculation
+                    recent_samples->push_back({cam_ns, pc_ns});
+                    if (recent_samples->size() > slope_recalc_window) {
+                        recent_samples->pop_front();
+                    }
+                    
+                    consecutive_anomalies = 0;
+                    anomaly_log_throttle = 0;
+                    recent_errors_ms->clear();
+                    
+                    // Skip the old 20-anomaly fallback since we handled it
+                    return;
+                }
             }
             
             // If too many consecutive anomalies, force a slope recalculation with higher alpha
@@ -182,30 +222,40 @@ public:
     void recalculateSlope(bool aggressive = false) {
         if (recent_samples->size() < 10) return;
         
-        double sum_x = 0, sum_y = 0, sum_xy = 0, sum_xx = 0;
         int n = recent_samples->size();
         
+        // Center data to avoid numerical precision loss with large epoch values
+        double mean_x = 0, mean_y = 0;
         for (const auto& sample : *recent_samples) {
-            double cam_ns = sample.first;
-            int64_t pc_ns = sample.second;
-            sum_x += cam_ns;
-            sum_y += pc_ns;
-            sum_xy += cam_ns * pc_ns;
-            sum_xx += cam_ns * cam_ns;
+            mean_x += sample.first;
+            mean_y += sample.second;
+        }
+        mean_x /= n;
+        mean_y /= n;
+        
+        double sum_xy = 0, sum_xx = 0;
+        for (const auto& sample : *recent_samples) {
+            double dx = sample.first - mean_x;
+            double dy = (double)sample.second - mean_y;
+            sum_xy += dx * dy;
+            sum_xx += dx * dx;
         }
         
-        double new_slope = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
-        double new_offset = (sum_y - new_slope * sum_x) / n;
+        if (sum_xx < 1e-6) return; // Not enough variance
+        double new_slope = sum_xy / sum_xx;
+        double new_offset = mean_y - new_slope * mean_x;
         
-        // Use higher alpha when in aggressive mode (drift correction)
-        double effective_alpha = aggressive ? 0.1 : alpha_slope;
+        // Decaying alpha: trust regression more in early samples (slope needs bigger corrections),
+        // converge to alpha_slope as calibration stabilizes.
+        // At samples_count=25 → ~0.15, at 100 → ~0.04, at 500 → ~0.01
+        double base_alpha = aggressive ? 0.15 : std::max((double)alpha_slope, 4.0 / (samples_count + 25.0));
         
         // Apply exponential smoothing to slope changes
         double old_slope = slope;
-        slope = (1.0 - effective_alpha) * slope + effective_alpha * new_slope;
+        slope = (1.0 - base_alpha) * slope + base_alpha * new_slope;
         
-        // Update offset more aggressively when slope changes
-        offset_ns = (1.0 - effective_alpha) * offset_ns + effective_alpha * new_offset;
+        // Update offset consistently with slope
+        offset_ns = (1.0 - base_alpha) * offset_ns + base_alpha * new_offset;
         
         // Log slope changes if significant
         if (std::abs(old_slope - slope) > 0.0001) {
@@ -271,25 +321,42 @@ inline TimestampCalibration performInitialCalibration(
     }
     
     // Linear regression: pc_time = slope * cam_time + offset
-    double sum_x = 0, sum_y = 0, sum_xy = 0, sum_xx = 0;
+    // Center data to avoid numerical precision loss with large epoch timestamps
     int n = camera_times.size();
     
+    double mean_x = 0, mean_y = 0;
     for(size_t i = 0; i < camera_times.size(); i++) {
-        double cam_ns = camera_times[i] * 1e9 / tick_frequency;
-        sum_x += cam_ns; 
-        sum_y += pc_times[i];
-        sum_xy += cam_ns * pc_times[i]; 
-        sum_xx += cam_ns * cam_ns;
+        mean_x += camera_times[i] * 1e9 / tick_frequency;
+        mean_y += pc_times[i];
+    }
+    mean_x /= n;
+    mean_y /= n;
+    
+    double sum_xy = 0, sum_xx = 0;
+    for(size_t i = 0; i < camera_times.size(); i++) {
+        double dx = camera_times[i] * 1e9 / tick_frequency - mean_x;
+        double dy = (double)pc_times[i] - mean_y;
+        sum_xy += dx * dy;
+        sum_xx += dx * dx;
     }
     
     TimestampCalibration cal;
     cal.camera_name = camera_name;
-    cal.slope = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
-    cal.offset_ns = (sum_y - cal.slope * sum_x) / n;
+    
+    double regression_slope = sum_xy / sum_xx;
+    cal.offset_ns = mean_y - regression_slope * mean_x;
+    
+    // The initial regression over a short window (~7s) has poor slope precision
+    // due to jitter (~30ms over 7.5s → ~0.004 error). For a hardware crystal oscillator
+    // the true slope is very close to 1.0 (typical drift <50ppm = 0.00005).
+    // Use slope=1.0 as initial value and let the adaptive calibration (50s window)
+    // converge to the true slope with much better precision.
+    // Recalculate offset with forced slope=1.0 for consistency.
+    cal.slope = 1.0;
+    cal.offset_ns = mean_y - cal.slope * mean_x;
     cal.initialized = true;
     
     // Calculate R² and max error
-    double mean_y = sum_y / n;
     double ss_tot = 0, ss_res = 0;
     double max_error_ms = 0;
     
@@ -308,7 +375,7 @@ inline TimestampCalibration performInitialCalibration(
     double r_squared = 1.0 - (ss_res / ss_tot);
     
     std::cout << "[" << camera_name << "::TimestampCalibration] Initial calibration results:" << std::endl;
-    std::cout << "              - Slope: " << cal.slope << std::endl;
+    std::cout << "              - Slope: " << cal.slope << " (regression: " << regression_slope << ")" << std::endl;
     std::cout << "              - Offset: " << cal.offset_ns/1e6 << " ms" << std::endl;
     std::cout << "              - R²: " << r_squared << std::endl;
     std::cout << "              - Max error: " << max_error_ms << " ms" << std::endl;

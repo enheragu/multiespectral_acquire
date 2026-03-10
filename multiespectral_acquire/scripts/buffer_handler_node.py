@@ -7,6 +7,7 @@ Buffers any ROS message and stores synchronized with master trigger
 import rospy
 import yaml
 import os
+import struct
 from collections import deque
 from pathlib import Path
 import importlib
@@ -194,12 +195,29 @@ class GenericBufferHandler:
                 self.sync_pub = rospy.Publisher(self.sync_topic, rospy.AnyMsg, queue_size=10)
     
     def get_timestamp_from_msg(self, msg):
-        """Extract timestamp from message (try header first)"""
+        """Extract timestamp from message.
+        Priority: 1) deserialized header.stamp, 2) raw buffer bytes, 3) rospy.Time.now()
+        """
+        # 1) Deserialized message with header
         try:
-            if hasattr(msg, 'header'):
+            if hasattr(msg, 'header') and hasattr(msg.header, 'stamp'):
                 return msg.header.stamp.to_nsec()
         except:
             pass
+        
+        # 2) Raw AnyMsg: extract header.stamp from serialized bytes
+        #    ROS messages starting with Header (or containing a msg with Header as first field)
+        #    have stamp at bytes 4-11: [seq(4B)][stamp.sec(4B)][stamp.nsec(4B)]
+        try:
+            if hasattr(msg, '_buff') and len(msg._buff) >= 12:
+                sec, nsec = struct.unpack_from('<II', msg._buff, 4)
+                # Sanity check: epoch timestamp between 2020 and 2040
+                if 1577836800 < sec < 2208988800:
+                    return sec * 1000000000 + nsec
+        except:
+            pass
+        
+        # 3) Fallback
         return rospy.Time.now().to_nsec()
     
     def get_exposure_from_msg(self, msg_raw):

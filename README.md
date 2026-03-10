@@ -1,322 +1,348 @@
-# multiespectral_acquire
+# Multiespectral Acquire
 
-## Architecture Overview
+Generic metapackage for **synchronized multi-sensor data acquisition** on mobile robots. The drivers, buffer synchronization pipeline, storage system and web GUI are all configurable via ROS parameters and launch files — any combination of cameras and sensors can be assembled.
 
-**New Simplified Architecture** - Publisher/Subscriber pattern with centralized recording control.
+| Package | Description |
+|---------|-------------|
+| [multiespectral_acquire](multiespectral_acquire/) | Camera drivers (Basler, FLIR), timestamp synchronization, buffer/storage pipeline, FOV crop |
+| [multiespectral_acquire_gui](multiespectral_acquire_gui/) | Flask + SocketIO web GUI for real-time acquisition control |
+| [temperature_driver](temperature_driver/) | DHT22 temperature/humidity sensor via NodeMCU (ESP8266) |
+
+Two ready-to-use configurations are provided as examples:
+
+| Configuration | Launch file | Master | Slave sensors | Namespace |
+|---------------|-------------|--------|---------------|-----------|
+| **Multiespectral** | `multiespectral_launch.launch` | Basler RGB (1 Hz) | FLIR LWIR (30 Hz, PTP), Ouster LIDAR (cropped), GNSS, odom, DHT22 | `/Multiespectral` |
+| **Fisheye** | `fisheye_launch.launch` | Basler frontal (1 Hz) | Basler rear (4 Hz), Ouster pointcloud (raw), GNSS, odom | `/Fisheye` |
+
+---
+
+## Architecture — Multiespectral Setup
 
 ```mermaid
-graph TB
-    subgraph "Camera Handlers (C++)"
-        VIS[Basler Handler<br/>basler_camera_handler]
-        LWIR[FLIR Handler<br/>flir_camera_handler]
+flowchart LR
+    subgraph HW["Hardware"]
+        CAM_VIS["Basler RGB<br/>(GigE)"]
+        CAM_LWIR["FLIR Thermal<br/>(GigE)"]
+        LIDAR["Ouster LIDAR"]
+        DHT_HW["DHT22<br/>(NodeMCU · USB)"]
+        GNSS_HW["GNSS receiver"]
+        ODO_HW["Wheel encoders<br/>+ IMU"]
     end
-    
-    subgraph "LIDAR Processing (C++)"
-        PC_CROP[PointCloud Crop<br/>pointcloud_crop_node]
-        IMG_CROP[Image Crop Nodes<br/>image_crop_node x4]
+
+    subgraph DRV["C++ Camera Drivers — core/ (ROS-independent)"]
+        direction TB
+        VIS_CORE["basler_adapter.cpp<br/>(Pylon SDK)"]
+        LWIR_CORE["flir_adapter.cpp<br/>(Spinnaker SDK)"]
     end
-    
-    subgraph "Buffer Handlers (Python)"
-        BUF_VIS[Buffer Visible<br/>buffer_handler_node.py]
-        BUF_LWIR[Buffer LWIR<br/>buffer_handler_node.py]
-        BUF_RANGE[Buffer Range<br/>buffer_handler_node.py]
-        BUF_REFLEC[Buffer Reflectivity<br/>buffer_handler_node.py]
-        BUF_SIGNAL[Buffer Signal<br/>buffer_handler_node.py]
-        BUF_NEARIR[Buffer Near-IR<br/>buffer_handler_node.py]
-        BUF_PC[Buffer PointCloud<br/>buffer_handler_node.py]
-        BUF_GNSS[Buffer GNSS<br/>buffer_handler_node.py]
-        BUF_ODOM[Buffer Odom<br/>buffer_handler_node.py]
+
+    subgraph ROS_DRV["ROS Thin Layer — camera_handler_node.cpp"]
+        VIS_NODE["basler_camera_handler"]
+        LWIR_NODE["flir_camera_handler"]
     end
-    
-    subgraph "External Sensors"
-        OUSTER[/Ouster LIDAR<br/>points + 4 images/]
-        GPS[/GNSS/]
-        ODO[/Odometry/]
+
+    subgraph EXT["External ROS Drivers"]
+        OUSTER_DRV["Ouster driver<br/>(ouster_ros)"]
+        GNSS_DRV["GNSS driver"]
+        ODO_DRV["Odometry"]
+        DHT_NODE["dht22_node.py<br/>(temperature_driver)"]
     end
-    
-    subgraph "Recording Control"
-        CTRL[/Multiespectral/recording_enabled<br/>std_msgs/Bool/]
-        GUI[Web GUI<br/>Flask + SocketIO]
+
+    subgraph CROP["C++ FOV Crop"]
+        PC_CROP["pointcloud_crop_node"]
+        IMG_CROP["image_crop_node ×4"]
     end
-    
-    VIS -->|visible_camera/image_with_metadata| BUF_VIS
-    VIS -.->|Master trigger| BUF_LWIR
-    VIS -.->|Master trigger| BUF_RANGE
-    VIS -.->|Master trigger| BUF_REFLEC
-    VIS -.->|Master trigger| BUF_SIGNAL
-    VIS -.->|Master trigger| BUF_NEARIR
-    VIS -.->|Master trigger| BUF_PC
-    VIS -.->|Master trigger| BUF_GNSS
-    VIS -.->|Master trigger| BUF_ODOM
-    
-    LWIR -->|lwir_camera/image_with_metadata| BUF_LWIR
-    
-    OUSTER -->|/ouster/points| PC_CROP
-    OUSTER -->|/ouster/range_image| IMG_CROP
-    OUSTER -->|/ouster/reflec_image| IMG_CROP
-    OUSTER -->|/ouster/signal_image| IMG_CROP
-    OUSTER -->|/ouster/nearir_image| IMG_CROP
-    
-    PC_CROP -->|points_cropped| BUF_PC
-    IMG_CROP -->|range_image_cropped| BUF_RANGE
-    IMG_CROP -->|reflec_image_cropped| BUF_REFLEC
-    IMG_CROP -->|signal_image_cropped| BUF_SIGNAL
-    IMG_CROP -->|nearir_image_cropped| BUF_NEARIR
-    
-    GPS -->|/gnss/fix| BUF_GNSS
-    ODO -->|/odometry/filtered| BUF_ODOM
-    
-    GUI -->|Publish Bool| CTRL
-    CTRL -.->|Enable/Disable| BUF_VIS
-    CTRL -.->|Enable/Disable| BUF_LWIR
-    CTRL -.->|Enable/Disable| BUF_RANGE
-    CTRL -.->|Enable/Disable| BUF_REFLEC
-    CTRL -.->|Enable/Disable| BUF_SIGNAL
-    CTRL -.->|Enable/Disable| BUF_NEARIR
-    CTRL -.->|Enable/Disable| BUF_PC
-    CTRL -.->|Enable/Disable| BUF_GNSS
-    CTRL -.->|Enable/Disable| BUF_ODOM
-    
-    BUF_VIS -->|PNG + YAML| DISK_VIS[(visible/)]
-    BUF_LWIR -->|PNG + YAML| DISK_LWIR[(lwir/)]
-    BUF_RANGE -->|PNG + YAML| DISK_RANGE[(range/)]
-    BUF_REFLEC -->|PNG + YAML| DISK_REFLEC[(reflec/)]
-    BUF_SIGNAL -->|PNG + YAML| DISK_SIGNAL[(signal/)]
-    BUF_NEARIR -->|PNG + YAML| DISK_NEARIR[(nearir/)]
-    BUF_PC -->|BIN + YAML| DISK_PC[(PointCloud/)]
-    BUF_GNSS -->|YAML| DISK_GNSS[(gnss/)]
-    BUF_ODOM -->|YAML| DISK_ODOM[(odom/)]
-    
-    style VIS fill:#a8d5ff
-    style LWIR fill:#a8d5ff
-    style PC_CROP fill:#a8d5ff
-    style IMG_CROP fill:#a8d5ff
-    style CTRL fill:#ffcc99
-    style GUI fill:#ffcc99
+
+    subgraph BUF["Python Buffer Handlers — buffer_handler_node.py"]
+        B_VIS["Buffer Visible<br/>(store_all)"]
+        B_LWIR["Buffer LWIR"]
+        B_LIDAR["Buffer LIDAR ×5<br/>(sync → crop → store)"]
+        B_GNSS["Buffer GNSS"]
+        B_ODO["Buffer Odom"]
+        B_DHT["Buffer DHT22"]
+    end
+
+    subgraph DISK["Disk — configured_path / mult_session /"]
+        D_VIS[("visible/")]
+        D_LWIR[("lwir/")]
+        D_LIDAR[("lidar_range/ · lidar_reflec/<br/>lidar_signal/ · lidar_nearir/<br/>lidar_pointcloud/")]
+        D_GNSS[("gnss/")]
+        D_ODO[("odom/")]
+        D_DHT[("dht22/")]
+    end
+
+    subgraph CTRL["Control — GUI :5051"]
+        GUI["Web GUI"]
+        REC(["recording_enabled<br/>Bool"])
+    end
+
+    CAM_VIS --> VIS_CORE --> VIS_NODE
+    CAM_LWIR --> LWIR_CORE --> LWIR_NODE
+    DHT_HW --> DHT_NODE
+    GNSS_HW --> GNSS_DRV
+    ODO_HW --> ODO_DRV
+    LIDAR --> OUSTER_DRV
+    OUSTER_DRV --> PC_CROP & IMG_CROP
+
+    VIS_NODE --> B_VIS
+    LWIR_NODE --> B_LWIR
+    PC_CROP & IMG_CROP --> B_LIDAR
+    GNSS_DRV --> B_GNSS
+    ODO_DRV --> B_ODO
+    DHT_NODE --> B_DHT
+
+    VIS_NODE -.->|master trigger| B_LWIR
+    VIS_NODE -.->|master trigger| B_LIDAR
+    VIS_NODE -.->|master trigger| B_GNSS
+    VIS_NODE -.->|master trigger| B_ODO
+    VIS_NODE -.->|master trigger| B_DHT
+
+    B_VIS --> D_VIS
+    B_LWIR --> D_LWIR
+    B_LIDAR --> D_LIDAR
+    B_GNSS --> D_GNSS
+    B_ODO --> D_ODO
+    B_DHT --> D_DHT
+
+    GUI --> REC
+    REC -.->|enable · disable| BUF
+
+    style HW fill:#e8e8e8,stroke:#888,color:#333
+    style DRV fill:#a8d5ff,stroke:#4a90d9,color:#1a3a5c
+    style ROS_DRV fill:#c5e0f7,stroke:#4a90d9,color:#1a3a5c
+    style EXT fill:#ddd,stroke:#999,color:#555
+    style CROP fill:#a8d5ff,stroke:#4a90d9,color:#1a3a5c
+    style BUF fill:#b8e6b8,stroke:#5aa55a,color:#1a3a1a
+    style DISK fill:#f5deb3,stroke:#c8a050,color:#5a4010
+    style CTRL fill:#ffcc99,stroke:#e6a040,color:#5a3510
+
+    linkStyle 17,18,19,20,21 stroke:#e05050,stroke-width:2,stroke-dasharray:5
+    linkStyle 29 stroke:#e6a040,stroke-width:2,stroke-dasharray:5
 ```
 
-**Key Features:**
-- **Publisher/Subscriber pattern**: Camera handlers publish, buffer handlers store
-- **Centralized recording control**: Single Bool topic controls all storage nodes
-- **Master-triggered sync**: All sensors synchronized with visible camera as master
-- **Generic buffer handler**: Works with any ROS message type using `rospy.AnyMsg`
-- **Flexible storage**: PNG (images), YAML (metadata), BIN (pointclouds)
-- **No rosbags**: Direct file storage for easier data management
-- **Auto store_all**: If no master_topic specified, stores all incoming data
-- **Session management**: One folder per execution, created on first recording enable
-- **Modular architecture**: Separate launch files for LIDAR crop and buffer handlers
+## Architecture — Fisheye Setup
 
-### Ouster LIDAR Images
+```mermaid
+flowchart LR
+    subgraph HW["Hardware"]
+        CAM_FRONT["Basler Frontal<br/>(GigE)"]
+        CAM_REAR["Basler Rear<br/>(GigE)"]
+        LIDAR["Ouster LIDAR"]
+        GNSS_HW["GNSS receiver"]
+        ODO_HW["Wheel encoders<br/>+ IMU"]
+    end
 
-The Ouster driver publishes 4 different image representations from the same point cloud scan:
+    subgraph DRV["C++ Camera Drivers — core/"]
+        VIS_CORE_F["basler_adapter.cpp"]
+        VIS_CORE_R["basler_adapter.cpp"]
+    end
 
-| Image Type | Topic | Content | Use Case |
-|------------|-------|---------|----------|
-| **Range** | `/ouster/range_image` | Distance to each point (depth map) | 3D reconstruction, obstacle detection |
-| **Reflectivity** | `/ouster/reflec_image` | Intensity of laser return | Material classification, lane marking detection |
-| **Signal** | `/ouster/signal_image` | Photon count (signal strength) | Signal quality assessment, filtering |
-| **Near-IR** | `/ouster/nearir_image` | Ambient near-infrared light | Passive imaging, illumination estimation |
+    subgraph ROS_DRV["ROS Thin Layer"]
+        FRONT_NODE["frontal_camera_handler"]
+        REAR_NODE["rear_camera_handler"]
+    end
 
-All images are organized as 2D arrays matching the LIDAR's scanning pattern (e.g., 1024×64 for OS1-64), where:
-- **Width**: Horizontal resolution (azimuth samples)
-- **Height**: Vertical resolution (elevation channels)
+    subgraph EXT["External ROS Drivers"]
+        OUSTER_DRV["Ouster driver<br/>(ouster_ros)"]
+        GNSS_DRV["GNSS driver"]
+        ODO_DRV["Odometry"]
+    end
 
-These images are cropped by FOV (configurable angular or pixel ranges) using `image_crop_node` and stored alongside the cropped point cloud for multimodal analysis.
+    subgraph BUF["Python Buffer Handlers"]
+        B_FRONT["Buffer Frontal<br/>(store_all)"]
+        B_REAR["Buffer Rear"]
+        B_PC["Buffer Pointcloud"]
+        B_GNSS["Buffer GNSS"]
+        B_ODO["Buffer Odom"]
+    end
+
+    subgraph DISK["Disk — configured_path / pr_session /"]
+        D_FRONT[("frontal/")]
+        D_REAR[("rear/")]
+        D_PC[("pointcloud/")]
+        D_GNSS[("gnss/")]
+        D_ODO[("odom/")]
+    end
+
+    subgraph CTRL["Control — GUI :5052"]
+        GUI["Web GUI"]
+        REC(["recording_enabled<br/>Bool"])
+    end
+
+    CAM_FRONT --> VIS_CORE_F --> FRONT_NODE
+    CAM_REAR --> VIS_CORE_R --> REAR_NODE
+    GNSS_HW --> GNSS_DRV
+    ODO_HW --> ODO_DRV
+    LIDAR --> OUSTER_DRV
+
+    FRONT_NODE --> B_FRONT
+    REAR_NODE --> B_REAR
+    OUSTER_DRV --> B_PC
+    GNSS_DRV --> B_GNSS
+    ODO_DRV --> B_ODO
+
+    FRONT_NODE -.->|master trigger| B_REAR
+    FRONT_NODE -.->|master trigger| B_PC
+    FRONT_NODE -.->|master trigger| B_GNSS
+    FRONT_NODE -.->|master trigger| B_ODO
+
+    B_FRONT --> D_FRONT
+    B_REAR --> D_REAR
+    B_PC --> D_PC
+    B_GNSS --> D_GNSS
+    B_ODO --> D_ODO
+
+    GUI --> REC
+    REC -.->|enable · disable| BUF
+
+    style HW fill:#e8e8e8,stroke:#888,color:#333
+    style DRV fill:#a8d5ff,stroke:#4a90d9,color:#1a3a5c
+    style ROS_DRV fill:#c5e0f7,stroke:#4a90d9,color:#1a3a5c
+    style EXT fill:#ddd,stroke:#999,color:#555
+    style BUF fill:#b8e6b8,stroke:#5aa55a,color:#1a3a1a
+    style DISK fill:#f5deb3,stroke:#c8a050,color:#5a4010
+    style CTRL fill:#ffcc99,stroke:#e6a040,color:#5a3510
+
+    linkStyle 12,13,14,15 stroke:#e05050,stroke-width:2,stroke-dasharray:5
+    linkStyle 22 stroke:#e6a040,stroke-width:2,stroke-dasharray:5
+```
+
+**Legend** (both diagrams): <span style="color:#4a90d9">blue</span> = C++ nodes (core + ROS layer) · <span style="color:#5aa55a">green</span> = Python buffers · <span style="color:#c8a050">tan</span> = disk · <span style="color:#e6a040">orange dashed</span> = recording control · <span style="color:#e05050">red dashed</span> = master trigger · gray = external drivers / hardware
+
+**Key differences**: the multiespectral setup adds FOV crop nodes between the Ouster driver and the buffers (2-stage LIDAR pipeline), uses a FLIR thermal camera as slave with PTP, and includes the DHT22 sensor. The fisheye setup uses two Basler cameras (no PTP, no crop), stores raw pointclouds directly, and has no temperature sensor.
+
+---
+
+The camera drivers use a **two-layer architecture**: `core/` (pure C++, ROS-independent) handles all SDK interaction, while `camera_handler_node.cpp` is a thin ROS wrapper. See [multiespectral_acquire/README.md](multiespectral_acquire/README.md) for details. This makes migrating from ROS1 to ROS2 a matter of replacing only the thin wrapper.
+
+**The master camera (Basler) drives all synchronization**: every time it captures a frame, each buffer handler finds the closest matching frame from its slave sensor within a configurable time window and stores the synchronized pair. The `recording_enabled` topic controls all buffers at once.
+
+### Multiespectral GUI (desktop view, with LIDAR displayed)
+
+<p align="center">
+  <img src="media/desktop_lidar.png" width="700"/>
+</p>
+
+The GUI is responsive — works on desktop and mobile. See [multiespectral_acquire_gui/README.md](multiespectral_acquire_gui/README.md) for all views.
+
+## Quick Start
+
+### Multiespectral
+```bash
+# Auto-timestamped session
+./multiespectral_acquire/scripts/launch_multiespectral_with_timestamp.sh
+
+# Or manual
+roslaunch multiespectral_acquire multiespectral_launch.launch session_folder:="my_session"
+
+# GUI (port 5051)
+roslaunch multiespectral_acquire_gui multiespectral_gui_launch.launch
+```
+
+### Fisheye
+```bash
+# Auto-timestamped session
+roslaunch multiespectral_acquire fisheye_launch.launch session_folder:="my_fisheye_session"
+
+# GUI (port 5052)
+roslaunch multiespectral_acquire_gui fisheye_gui_launch.launch
+```
+
+### Recording control
+```bash
+# Via topic
+rostopic pub /<namespace>/recording_enabled std_msgs/Bool "data: true"
+rostopic pub /<namespace>/recording_enabled std_msgs/Bool "data: false"
+
+# Or use the web GUI
+```
+
+## Output Structure
+
+Each session creates a folder with one subfolder per sensor type:
+
+### Multiespectral
+```
+<configured_path>/mult_<session>/
+├── visible/           # PNG + YAML per frame (master, all stored)
+├── lwir/              # PNG + YAML (synced to visible master)
+├── lidar_range/       # Cropped range depth images
+├── lidar_reflec/      # Cropped reflectivity images
+├── lidar_signal/      # Cropped signal strength images
+├── lidar_nearir/      # Cropped near-IR images
+├── lidar_pointcloud/  # BIN + YAML (cropped 3D point clouds)
+├── gnss/              # YAML (GPS fixes, synced to master)
+├── odom/              # YAML (odometry, synced to master)
+└── dht22/             # YAML (temperature + humidity, synced to master)
+```
+
+### Fisheye
+```
+<configured_path>/pr_<session>/
+├── frontal/           # PNG + YAML per frame (master, all stored)
+├── rear/              # PNG + YAML (synced to frontal master)
+├── pointcloud/        # BIN + YAML (raw, synced to master)
+├── gnss/              # YAML (synced to master)
+└── odom/              # YAML (synced to master)
+```
 
 ## Dependencies
 
-Note that due to licensing issues no conde from Pylon or Spinnaker is uploaded here. Both libraries need to be installed. 
-As for pylon, autogenerated wrapper for this camera is used (generated by pylon software).
+| Library | Required by | Notes |
+|---------|-------------|-------|
+| [Pylon SDK](https://www.baslerweb.com/en/software/pylon/) | `basler_camera_handler` | Proprietary, install manually |
+| [Spinnaker SDK](https://www.flir.com/products/spinnaker-sdk/) | `flir_camera_handler` | Proprietary, install manually |
+| OpenCV | All image nodes | `apt install libopencv-dev` |
+| Flask + SocketIO | GUI package | `pip install -r multiespectral_acquire_gui/requirements.txt` |
 
-# PTP synchronization
+For details on each package, see:
+- [multiespectral_acquire/README.md](multiespectral_acquire/README.md) — Drivers, timestamp calibration (PTP vs software), buffer synchronization
+- [multiespectral_acquire_gui/README.md](multiespectral_acquire_gui/README.md) — Web GUI usage
+- [temperature_driver/README.md](temperature_driver/README.md) — DHT22 sensor setup
 
-Camera timestamps are synchronized with PTP, to do so a PTP daemon needs to be running on the OBC.
+## GUI
 
-```sh
-    sudo apt install linuxptp
-    ethtool -T eth0 # Check if output supports PTP software or hardware or both
-```
+The GUI is **generic and configurable** via ROS parameters — camera names, topics, and port are all set in the launch file. Two preconfigured variants are provided:
 
-Setup as master in `/etc/linuxptp/ptp4l.conf`:
-```sh
-[global]
-# Define as master
-gmCapable 1
-# Interval of Sync messages
-logSyncInterval 1
-# Interval announce messages
-logAnnounceInterval 1
-# Interval Delay_Req messages
-logMinDelayReqInterval 0
-```
+| Variant | Port | Launch | Camera 1 | Camera 2 |
+|---------|------|--------|----------|----------|
+| Multiespectral | 5051 | `multiespectral_gui_launch.launch` | LWIR thermal | Visible RGB |
+| Fisheye | 5052 | `fisheye_gui_launch.launch` | Frontal | Rear |
 
-Run the PTP service and synchronize system clock :)
-(in the robot intefaces are enp1s0 and enp2s0)
-```sh
-sudo ptp4l -i enp1s0 -m -S -f /etc/linuxptp/ptp4l.conf
-sudo phc2sys -c CLOCK_REALTIME -s enp1s0 -w -m
-sudo ptp4l -i enp2s0 -m -S -f /etc/linuxptp/ptp4l.conf
-sudo phc2sys -c CLOCK_REALTIME -s enp2s0 -w -m
+Features:
+- Real-time recording status (IDLE / RECORDING REQUESTED / RECORDING / STOP REQUESTED)
+- Live camera preview synced at master rate
+- Dynamic LIDAR visibility (shows/hides based on topic availability)
+- Frame rate monitoring and image counter per sensor
 
-```
-
-## Usage
-
-Launch the complete multiespectral acquisition system:
-
-```bash
-# Easy way: Use helper script with automatic timestamp
-./src/multiespectral_acquire/scripts/launch_with_timestamp.sh
-
-# Or manually specify session folder
-roslaunch multiespectral_acquire multiespectral_launch.launch session_folder:="27-01-2026_10h30m"
-
-# With custom parameters
-./src/multiespectral_acquire/scripts/launch_with_timestamp.sh \
-    dataset_output_path:=/custom/path \
-    output_frame_rate:=2
-```
-
-**Control recording via topic:**
-```bash
-# Enable recording (creates folder on first enable)
-rostopic pub /Multiespectral/recording_enabled std_msgs/Bool "data: true"
-
-# Disable recording (keeps folder for next enable)
-rostopic pub /Multiespectral/recording_enabled std_msgs/Bool "data: false"
-```
-
-**Or use the Web GUI:**
-```bash
-# Start the GUI (from multiespectral_acquire_gui package)
-roslaunch multiespectral_acquire_gui multiespectral_gui_launch.launch
-
-# Access at http://localhost:5000
-# - Click "Start Acquisition" to enable recording (badge turns green "RECORDING")
-# - Click "Stop Acquisition" to disable recording (badge turns gray "IDLE")
-# - View live camera feeds (LWIR, RGB, and SWIR if LIDAR available)
-# - Monitor frame rates and image counts in real-time
-```
-
-**GUI Features:**
-- ✅ Real-time recording status indicator (4 states: IDLE, RECORDING REQUESTED, RECORDING, STOP REQUESTED)
-- ✅ Live camera preview synced at master rate (shows exactly what's being stored)
-- ✅ Dynamic LIDAR visibility (shows/hides based on topic availability)
-- ✅ Frame rate monitoring reflects actual storage rate
-- ✅ Image counter per sensor
-- ✅ Responsive layout (landscape/portrait modes)
-
-**Note:** GUI subscribes to `_sync` topics, so images only appear when recording is active and data is being synchronized/stored.
-
-**Output structure:**
-```
-/home/administrator/images_eeha/27-01-2026_10h30m/
-├── visible/
-│   ├── 0000001.png
-│   ├── 0000001.yaml
-│   └── ...
-├── lwir/
-│   ├── 0000001.png
-│   ├── 0000001.yaml
-│   └── ...
-├── swir/
-├── PointCloud/
-│   ├── 0000001.bin
-│   ├── 0000001.yaml
-│   └── ...
-├── gnss/
-│   ├── 0000001.yaml
-│   └── ...
-└── odom/
-    ├── 0000001.yaml
-    └── ...
-```
-
-**Important notes:**
-- Default session_folder is "session" - manually specify timestamp when launching
-- Helper script `launch_with_timestamp.sh` generates timestamp automatically
-- Storage folder is created **once** when recording is first enabled
-- Same folder is reused across enable/disable cycles during execution
-
-## Testing
-
-Both launch files execute correctly:
-
-```bash
-# Test main acquisition system
-roslaunch multiespectral_acquire multiespectral_launch.launch session_folder:="test"
-
-# Test GUI control interface (requires ROS master running)
-roslaunch multiespectral_acquire_gui multiespectral_gui_launch.launch
-# Access GUI at http://localhost:5000
-```
-
-**Expected output for GUI:**
-- Node initialized successfully
-- Publishing to `/Multiespectral/recording_enabled`
-- Flask app serving on port 5000
-- Warning about LIDAR topic if acquisition system not running (normal)
-
-
-## GUI Configuration
-
-The GUI is now **generic and configurable** via ROS parameters. You can customize camera names and topics:
-
-### Multiespectral Setup (Default)
-```xml
-<!-- Default camera assignments -->
-<arg name="gui_title" default="Multiespectral Camera GUI" />
-<arg name="camera1_topic" default="/Multiespectral/lwir_camera/image_with_metadata_sync" />
-<arg name="camera1_name" default="LWIR Camera" />
-<arg name="camera2_topic" default="/Multiespectral/visible_camera/image_with_metadata_sync" />
-<arg name="camera2_name" default="Visible Camera" />
-```
-
-### Fisheye Setup
-```bash
-# Launch fisheye acquisition with buffers
-roslaunch multiespectral_acquire fisheye_launch.launch session_folder:="my_fisheye_session"
-
-# Launch fisheye GUI (in another terminal)
-roslaunch multiespectral_acquire_gui fisheye_gui_launch.launch
-# Access GUI at http://localhost:5000
-```
-
-The fisheye setup includes:
-- **Frontal camera** (master at 1Hz by default)
-- **Rear camera** (slave at 5Hz, synchronized to frontal)
-- **Buffer handlers** for both cameras with GNSS and odometry
-- **No LIDAR** processing (fisheye-specific)
+**Note:** GUI subscribes to `_sync` topics — images only appear when recording is active.
 
 ### Custom Configuration
-To use different cameras or names, modify the launch file arguments:
 
 ```bash
 roslaunch multiespectral_acquire_gui multiespectral_gui_launch.launch \
     gui_title:="My Custom GUI" \
-    camera1_topic:="/Multiespectral/thermal/image_sync" \
+    camera1_topic:="/MyNamespace/thermal/image_sync" \
     camera1_name:="Thermal IR" \
-    camera2_topic:="/Multiespectral/rgb/image_sync" \
+    camera2_topic:="/MyNamespace/rgb/image_sync" \
     camera2_name:="RGB Camera"
 ```
 
-Or create a custom launch file (see [multiespectral_gui_custom_example.launch](multiespectral_acquire_gui/launch/multiespectral_gui_custom_example.launch) or [fisheye_gui_launch.launch](multiespectral_acquire_gui/launch/fisheye_gui_launch.launch)).
+## GUI control in python with venv
 
-The GUI will automatically:
-- Display the custom title in browser tab and page header
-- Subscribe to the configured camera topics
-- Display the custom names in labels and titles
-- Update all UI elements dynamically
-
-
-## GUI control in python with VEVN
-
-The python venv can be created inside the workspace but needs to be ignored by colcon:
+The python venv can be created inside the workspace but needs to be ignored by catkin:
 ```sh
-    source /opt/ros/jazzy/setup.bash
+    source /opt/ros/noetic/setup.bash
     python3 -m venv .venv
-    touch .venv/COLCON_IGNORE
+    touch .venv/CATKIN_IGNORE
     source .venv/bin/activate
-    pip install -r /multiespectral_acquire_gui/requirements.txt
+    pip install -r multiespectral_acquire_gui/requirements.txt
 ```
+
+## Related Repositories
+
+| Repository | Relation |
+|------------|----------|
+| [husky_manager](https://github.com/enheragu/husky_manager) | Main web dashboard (port 5050) — links to the camera GUIs, provides process management and sensor monitoring |
+| [test_utils](https://github.com/enheragu/test_utils) | Systemd services (`multiespectral_cameras`, `fisheye_cameras`, `multiespectral_gui`, `fisheye_gui`) for auto-start, shell shortcuts (F8/F9), Conky status display |
 

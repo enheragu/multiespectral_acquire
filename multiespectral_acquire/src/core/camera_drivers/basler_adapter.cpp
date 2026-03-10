@@ -365,7 +365,7 @@ bool beginAcquisition()
         std::cout << "[BaslerAdapter::"<<getName()<<"::beginAcquisition] Acquisition already started." << std::endl;
     }
 
-    // Timestamp calibration initialization :)
+    // Software timestamp calibration if PTP not available
     if (!ptp_supported)
     {
         g_calibration = calibrateTimestamps(30);
@@ -499,17 +499,14 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
             int64_t cam_ns = camera_timestamp_ticks * 1e9 / tick_frequency;
              
             metadata.camera_timestamp = cam_ns;
-            // Aplicar calibración actual al timestamp de la cámara
-            if (!ptp_supported)
+            
+            // Apply software calibration if PTP not available
+            if (!ptp_supported) {
+                int64_t pc_ns = (pc_start.time_since_epoch().count() + 
+                               pc_end.time_since_epoch().count()) / 2;
                 metadata.camera_timestamp = g_calibration.offset_ns + cam_ns * g_calibration.slope;
-            
-            // Actualizar calibración con esta nueva muestra
-            // Usar el promedio de pc_start y pc_end para mejor precisión
-            int64_t pc_ns = (pc_start.time_since_epoch().count() + 
-                           pc_end.time_since_epoch().count()) / 2;
-            
-            if (!ptp_supported)                           
                 g_calibration.updateWithSample(camera_timestamp_ticks, pc_ns, tick_frequency);
+            }
             
             // std::cout << "[BaslerAdapter::"<<getName()<<"::acquireImage] Image acquired with timestamp (ns): " << metadata.camera_timestamp << std::endl;
             
