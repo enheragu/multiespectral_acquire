@@ -30,7 +30,7 @@
         <!-- Buffer handlers for synchronization and storage -->
         <include file="$(find multiespectral_acquire)/launch/fisheye_buffer_handlers.launch">
             <arg name="output_path" value="$(arg output_path)"/>
-            <arg name="master_topic" value="frontal_camera/image_with_metadata"/>
+            <arg name="main_topic" value="frontal_camera/image_with_metadata"/>
             <arg name="ouster_exposure_ns" value="$(arg ouster_exposure_ns)"/>
         </include>
 

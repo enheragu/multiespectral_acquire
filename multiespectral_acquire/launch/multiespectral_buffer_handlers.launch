@@ -1,7 +1,7 @@
 <launch>
   <!-- Arguments passed from parent launch -->
   <arg name="output_path"/>
-  <arg name="master_topic"/>
+  <arg name="main_topic"/>
   <arg name="ouster_exposure_ns"/>  <!-- Still needed for Ouster (not ImageWithMetadata) -->
   
   <!-- Additional topics -->
@@ -17,33 +17,33 @@
   <!-- CAMERAS (direct store) -->
   <!-- ========================================================================== -->
 
-  <!-- Visible camera buffer (no master = auto store_all) -->
+  <!-- Visible camera buffer (no main topic = auto store_all) -->
   <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_visible" output="screen">
     <param name="handler_type" value="image"/>
     <param name="data_topic" value="visible_camera/image_with_metadata"/>
     <param name="output_path" value="$(arg output_path)/visible"/>
   </node>
 
-  <!-- LWIR camera buffer (synced with visible as master) -->
+  <!-- LWIR camera buffer (synced with visible as main reference) -->
   <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_lwir" output="screen">
     <param name="handler_type" value="image"/>
     <param name="data_topic" value="lwir_camera/image_with_metadata"/>
-    <param name="master_topic" value="$(arg master_topic)"/>
+    <param name="main_topic" value="$(arg main_topic)"/>
     <param name="output_path" value="$(arg output_path)/lwir"/>
-    <param name="max_time_diff" value="0.4"/>
+    <param name="max_time_diff" value="0.1"/>
     <!-- exposure_time auto-detected from message metadata -->
   </node>
 
   <!-- ========================================================================== -->
   <!-- LIDAR: Sync-only buffers (raw -> _sync, no disk) -->
-  <!-- These synchronize raw LIDAR data with master, output goes to crop nodes -->
+  <!-- These synchronize raw LIDAR data with main reference, output goes to crop nodes -->
   <!-- ========================================================================== -->
 
   <!-- LIDAR Range Image: sync only -->
   <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_range_sync" output="screen">
     <param name="handler_type" value="simple_image"/>
     <param name="data_topic" value="/ouster/range_image"/>
-    <param name="master_topic" value="$(arg master_topic)"/>
+    <param name="main_topic" value="$(arg main_topic)"/>
     <param name="output_path" value="$(arg output_path)/lidar_range"/>
     <param name="max_time_diff" value="$(arg max_time_diff_ouster)"/>
     <param name="exposure_time_ns" value="$(arg ouster_exposure_ns)"/>
@@ -55,7 +55,7 @@
   <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_reflec_sync" output="screen">
     <param name="handler_type" value="simple_image"/>
     <param name="data_topic" value="/ouster/reflec_image"/>
-    <param name="master_topic" value="$(arg master_topic)"/>
+    <param name="main_topic" value="$(arg main_topic)"/>
     <param name="output_path" value="$(arg output_path)/lidar_reflec"/>
     <param name="max_time_diff" value="$(arg max_time_diff_ouster)"/>
     <param name="exposure_time_ns" value="$(arg ouster_exposure_ns)"/>
@@ -67,7 +67,7 @@
   <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_signal_sync" output="screen">
     <param name="handler_type" value="simple_image"/>
     <param name="data_topic" value="/ouster/signal_image"/>
-    <param name="master_topic" value="$(arg master_topic)"/>
+    <param name="main_topic" value="$(arg main_topic)"/>
     <param name="output_path" value="$(arg output_path)/lidar_signal"/>
     <param name="max_time_diff" value="$(arg max_time_diff_ouster)"/>
     <param name="exposure_time_ns" value="$(arg ouster_exposure_ns)"/>
@@ -79,7 +79,7 @@
   <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_nearir_sync" output="screen">
     <param name="handler_type" value="simple_image"/>
     <param name="data_topic" value="/ouster/nearir_image"/>
-    <param name="master_topic" value="$(arg master_topic)"/>
+    <param name="main_topic" value="$(arg main_topic)"/>
     <param name="output_path" value="$(arg output_path)/lidar_nearir"/>
     <param name="max_time_diff" value="$(arg max_time_diff_ouster)"/>
     <param name="exposure_time_ns" value="$(arg ouster_exposure_ns)"/>
@@ -91,7 +91,7 @@
   <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_pointcloud_sync" output="screen">
     <param name="handler_type" value="pointcloud"/>
     <param name="data_topic" value="/ouster/points"/>
-    <param name="master_topic" value="$(arg master_topic)"/>
+    <param name="main_topic" value="$(arg main_topic)"/>
     <param name="output_path" value="$(arg output_path)/lidar_pointcloud"/>
     <param name="max_time_diff" value="$(arg max_time_diff_ouster)"/>
     <param name="exposure_time_ns" value="$(arg ouster_exposure_ns)"/>
@@ -102,7 +102,7 @@
   <!-- ========================================================================== -->
   <!-- LIDAR: Store buffers (cropped -> disk) -->
   <!-- These receive cropped data from crop nodes and store to disk -->
-  <!-- No master_topic = auto store_all mode -->
+  <!-- No main_topic = auto store_all mode -->
   <!-- img_name is extracted from frame_id (set by buffer_sync, preserved by crop) -->
   <!-- ========================================================================== -->
 
@@ -142,13 +142,13 @@
   </node>
 
   <!-- ========================================================================== -->
-  <!-- OTHER SENSORS (synced with master) -->
+  <!-- OTHER SENSORS (synced with main reference) -->
   <!-- ========================================================================== -->
 
   <!-- GNSS buffer (synced with visible) -->
   <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_gnss" output="screen">
     <param name="data_topic" value="$(arg gnss_topic)"/>
-    <param name="master_topic" value="$(arg master_topic)"/>
+    <param name="main_topic" value="$(arg main_topic)"/>
     <param name="output_path" value="$(arg output_path)/gnss"/>
     <param name="max_time_diff" value="1.5"/>
   </node>
@@ -156,7 +156,7 @@
   <!-- Odometry buffer (synced with visible) -->
   <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_odom" output="screen">
     <param name="data_topic" value="$(arg odom_topic)"/>
-    <param name="master_topic" value="$(arg master_topic)"/>
+    <param name="main_topic" value="$(arg main_topic)"/>
     <param name="output_path" value="$(arg output_path)/odom"/>
     <param name="max_time_diff" value="1.5"/>
   </node>
@@ -164,7 +164,7 @@
   <!-- DHT22 buffer (synced with visible) -->
   <node pkg="multiespectral_acquire" type="buffer_handler_node.py" name="buffer_dht22" output="screen">
     <param name="data_topic" value="/dht22/data"/>
-    <param name="master_topic" value="$(arg master_topic)"/>
+    <param name="main_topic" value="$(arg main_topic)"/>
     <param name="output_path" value="$(arg output_path)/dht22"/>
     <param name="max_time_diff" value="1.5"/>
   </node>

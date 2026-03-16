@@ -9,11 +9,11 @@
   <arg name="output_frame_rate" default="1"/>
   <arg name="gnss_topic" default="/gnss/fix"/>
   <arg name="odom_topic" default="/odometry/combined"/>
-  <arg name="master_topic" default="visible_camera/image_with_metadata"/>
+  <arg name="main_topic" default="visible_camera/image_with_metadata"/>
   
   <!-- Camera PTP and Exposure Configuration -->
   <arg name="visible_use_ptp" default="false"/> <!-- Basler camera does not support PTP -->
-  <arg name="lwir_use_ptp" default="true"/>
+  <arg name="lwir_use_ptp" default="false"/>
   <!-- Use exposure time for syncronization between different sensors in the middle of 
        the exposure -->
   <arg name="ouster_exposure_ns" default="30000"/>     <!-- ~30µs = 30000ns, from dataseet -->
@@ -33,7 +33,7 @@
   <group ns="Multiespectral">
     <!-- ====== CAMERA HANDLERS (only publish images) ====== -->
     
-    <!-- Visible Camera (Basler) - acts as master (all data syncs to this) -->
+    <!-- Visible Camera (Basler) - acts as main reference (all data syncs to this) -->
     <node pkg="multiespectral_acquire" type="basler_camera_handler" name="visible_camera" output="screen" required="true">
       <param name="image_topic" value="visible_camera"/>
       <param name="camera_ip" value="$(env MULTIESPECTRAL_VISIBLE_IP)"/>
@@ -47,7 +47,7 @@
     <!-- FLIR default capturing frame rate is 30Hz -->
     <node pkg="multiespectral_acquire" type="flir_camera_handler" name="lwir_camera" output="screen" required="true">
       <param name="image_topic" value="lwir_camera"/>
-      <param name="frame_rate" value="30"/>
+      <param name="output_frame_rate" value="30"/>
       <param name="camera_info_url" value="file://$(find multiespectral_acquire)/conf/lwir_params.yaml"/>
       <param name="dataset_name" value="$(arg session_folder)"/>
       <param name="use_ptp" value="$(arg lwir_use_ptp)"/>
@@ -66,7 +66,7 @@
     <!-- ====== BUFFER HANDLERS (separate launch) ====== -->
     <include file="$(find multiespectral_acquire)/launch/multiespectral_buffer_handlers.launch">
       <arg name="output_path" value="$(arg output_path)"/>
-      <arg name="master_topic" value="$(arg master_topic)"/>
+      <arg name="main_topic" value="$(arg main_topic)"/>
       <arg name="ouster_exposure_ns" value="$(arg ouster_exposure_ns)"/>
     </include>    
   </group>

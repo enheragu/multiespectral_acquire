@@ -4,7 +4,7 @@ Generic ROS package for synchronized multi-sensor data acquisition: camera drive
 
 The package is **hardware-agnostic** — any combination of cameras and sensors can be configured via launch files. Two example configurations are provided:
 
-| Configuration | Master | Slaves | LIDAR pipeline |
+| Configuration | Main | Followers | LIDAR pipeline |
 |---|---|---|---|
 | **Multiespectral** | Basler RGB (1 Hz) | FLIR LWIR (PTP), Ouster (cropped), GNSS, odom, DHT22 | 2-stage: sync → FOV crop → store |
 | **Fisheye** | Basler frontal (1 Hz) | Basler rear (4 Hz), Ouster (raw), GNSS, odom | Direct: sync → store |
@@ -63,23 +63,33 @@ Each driver publishes `ImageWithMetadata` (`image` + `metadata` with hardware ti
 
 ### Python Buffer Handler
 
-`scripts/buffer_handler_node.py` — Generic, reusable node that:
-1. Subscribes to any ROS topic (`rospy.AnyMsg`)
-2. Buffers incoming messages in a thread-safe circular buffer (default 50 frames)
-3. On each **master trigger** (visible camera frame), finds the closest buffered message within `max_time_diff`
-4. Republishes the synchronized pair and stores to disk (PNG/BIN + YAML)
+`scripts/buffer_handler_node.py` is generic and type-agnostic (`rospy.AnyMsg`).
 
-If no `master_topic` is configured, it operates in **store_all** mode (stores every incoming message).
+It has two modes:
+1. **store_all** (no `main_topic`): republishes and optionally stores every incoming message.
+2. **sync** (with `main_topic`): aligns follower data to the main trigger timestamp.
+
+In **sync** mode it uses a simple double-buffer strategy:
+1. **Main buffer (`TimedBuffer`)**: thread-safe ring buffer with recent follower messages (starts at 100 frames).
+2. **Pending sync queue**: bounded queue (max 10) for main triggers that cannot be matched immediately.
+
+Per main trigger:
+1. Computes target timestamp using exposure midpoint.
+2. Tries nearest match in main buffer within `max_time_diff`.
+3. If matched: republishes to `<topic>_sync` and optionally stores to disk (PNG/BIN + YAML).
+4. If not matched and buffer is already newer than target: drops that sync request (too late) and may grow main buffer (bounded) to absorb future late main arrivals.
+5. If not matched and buffer is not newer yet: enqueues request in pending queue and retries it on each new follower message.
+6. If pending queue is full: oldest pending request is dropped.
 
 ## Timestamp Synchronization
 
-All sensors synchronize to the **visible camera (Basler)** as master. The sync point accounts for exposure:
+All sensors synchronize to the **visible camera (Basler)** as main reference. The sync point accounts for exposure:
 
 $$t_{sync} = t_{camera} + \frac{t_{exposure}}{2}$$
 
 ### PTP Mode (preferred)
 
-When a camera supports IEEE 1588 PTP and a PTP master is running on the network, the camera's hardware clock is synchronized directly. Timestamps are in the same time domain as the PC — no software correction needed.
+When a camera supports IEEE 1588 PTP and a PTP grandmaster is running on the network, the camera's hardware clock is synchronized directly. Timestamps are in the same time domain as the PC — no software correction needed.
 
 **Startup sanity check**: At `beginAcquisition()` the driver captures 10 samples and compares camera timestamps against PC time. If more than half exceed **5 seconds** difference (indicating PTP never locked), it automatically falls back to software calibration and logs a warning. This check runs once at startup since PTP failures are typically initialization problems, not mid-run issues.
 
@@ -99,7 +109,7 @@ For cameras without PTP (e.g., Basler acA1600 via GigE):
 sudo apt install linuxptp
 ethtool -T <interface>  # Verify PTP support
 
-# Run PTP master + sync system clock
+# Run PTP grandmaster + sync system clock
 sudo ptp4l -i <interface> -m -S -f /etc/linuxptp/ptp4l.conf
 sudo phc2sys -c CLOCK_REALTIME -s <interface> -w -m
 ```
