@@ -554,7 +554,8 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
             // Get timestamp in nanoseconds (already in ns for FLIR)
             auto timestamp_nanoseconds = convertedImage->GetTimeStamp();
             metadata.camera_timestamp = static_cast<uint64_t>(timestamp_nanoseconds);
-            
+            metadata.updateTimetag();
+                        
             // Apply software calibration if PTP not available
             if (!ptp_supported) {
                 int64_t pc_ns = (pc_start.time_since_epoch().count() + 

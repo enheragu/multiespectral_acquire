@@ -13,7 +13,7 @@
   
   <!-- Camera PTP and Exposure Configuration -->
   <arg name="visible_use_ptp" default="false"/> <!-- Basler camera does not support PTP -->
-  <arg name="lwir_use_ptp" default="false"/>
+  <arg name="lwir_use_ptp" default="true"/>
   <!-- Use exposure time for syncronization between different sensors in the middle of 
        the exposure -->
   <arg name="ouster_exposure_ns" default="30000"/>     <!-- ~30µs = 30000ns, from dataseet -->

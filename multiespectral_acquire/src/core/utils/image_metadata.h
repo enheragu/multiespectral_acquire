@@ -57,6 +57,7 @@ public:
 
     ImageMetadata();
 
+    void updateTimetag();
     void setROSTimeNowCallback(ROSTimeNowCallback cb);
     void setExposure(uint64_t exposure_ns);
     uint64_t getSyncTimestamp() const;

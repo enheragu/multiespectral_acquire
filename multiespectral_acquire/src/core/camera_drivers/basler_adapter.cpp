@@ -62,6 +62,7 @@ std::string model_name = "Unknown";  // Camera model name
 int64_t tick_frequency = 1000000; // ticks per second default 1 MHz
 bool ptp_supported = false;
 bool force_disable_ptp = false;  // Set true to force manual calibration even if PTP available
+int64_t max_exposure_time = 200000; // in microseconds (200 ms default)
 
 // Global variable to store calibration
 TimestampCalibration g_calibration;
@@ -225,7 +226,13 @@ bool initCamera(int frame_rate, std::string camera_ip)
         // Store model name for logging
         model_name = std::string(pBasler->GetDeviceInfo().GetModelName());
 
-        // Enable Auto Exposure (set to Continuous mode)
+        // Enable Auto Exposure (set to Continuous mode) with upper limit to avoid movement blurr
+        TRY_CONFIG(pBasler->AutoExposureTimeAbsUpperLimit)
+        {
+            pBasler->AutoExposureTimeAbsUpperLimit.SetValue(max_exposure_time);
+            std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] Auto exposure max limit set to: " << max_exposure_time << " microseconds." << std::endl;
+        }
+
         CHECK_ARW(pBasler->ExposureAuto)
         std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] Autoexposure enabled in continuous mode." << std::endl;
         pBasler->ExposureAuto.SetValue(Basler_UniversalCameraParams::ExposureAuto_Continuous);
@@ -240,6 +247,13 @@ bool initCamera(int frame_rate, std::string camera_ip)
         TRY_CONFIG(pBasler->BalanceWhiteAuto) {
             pBasler->BalanceWhiteAuto.SetValue(Basler_UniversalCameraParams::BalanceWhiteAuto_Continuous);
             std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] Auto Balance White enabled in continuous mode." << std::endl;
+        }
+
+        TRY_CONFIG(pBasler->GainAuto)
+        {
+            pBasler->GainAuto.SetValue(Basler_UniversalCameraParams::GainAuto_Continuous);
+            std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] Auto gain enabled in continuous mode." << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
 
         std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] Frame Rate should be handled with loop that calls trigger as no continuous capture is enabled." << std::endl;
@@ -302,41 +316,24 @@ bool initCamera(int frame_rate, std::string camera_ip)
         //  Metadata extraction enabling  //
         ////////////////////////////////////
 
-        // Try to enable chunk mode for metadata extraction (optional - not all cameras support this)
-        try {
-            if (IsAvailable(pBasler->ChunkModeActive) && IsWritable(pBasler->ChunkModeActive)) {
-                pBasler->ChunkModeActive.SetValue(true);
-                std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] Chunk mode enabled for metadata extraction." << std::endl;
-
-                // Try to enable specific chunks if available
+        if (IsAvailable(pBasler->ChunkModeActive) && IsWritable(pBasler->ChunkModeActive))
+        {
+            pBasler->ChunkModeActive.SetValue(true);
+            std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] Chunk mode enabled for metadata extraction." << std::endl;
+            
+            std::vector<std::string> chunk_names = {"Gain", "GainAll", "ExposureTime", "Framecounter"};
+            for (const auto& name : chunk_names)
+            {
                 try {
-                    pBasler->ChunkSelector.SetValue("Framecounter");
+                    pBasler->ChunkSelector.SetValue(name.c_str());
                     pBasler->ChunkEnable.SetValue(true);
-                    std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] - Framecounter chunk enabled." << std::endl;
-                } catch (const Pylon::GenericException &e) {
-                    std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] - Framecounter chunk not available: " << e.GetDescription() << std::endl;
+                    if (pBasler->ChunkEnable.IsReadable() && pBasler->ChunkEnable.GetValue()) {
+                        std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera]  ✓ Chunk '" << name << "' habilitado" << std::endl;
+                    }
+                } catch (...) {
+                    std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera]  ✗ Chunk '" << name << "' no disponible" << std::endl;
                 }
-
-                try {
-                    pBasler->ChunkSelector.SetValue("ExposureTime");
-                    pBasler->ChunkEnable.SetValue(true);
-                    std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] - ExposureTime chunk enabled." << std::endl;
-                } catch (const Pylon::GenericException &e) {
-                    std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] - ExposureTime chunk not available: " << e.GetDescription() << std::endl;
-                }
-
-                try {
-                    pBasler->ChunkSelector.SetValue("GainAll");
-                    pBasler->ChunkEnable.SetValue(true);
-                    std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] - GainAll chunk enabled." << std::endl;
-                } catch (const Pylon::GenericException &e) {
-                    std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] - GainAll chunk not available: " << e.GetDescription() << std::endl;
-                }
-            } else {
-                std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] Chunk mode not available on this camera (will extract metadata from direct parameters)." << std::endl;
             }
-        } catch (const Pylon::GenericException &e) {
-            std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] Could not configure chunk mode: " << e.GetDescription() << " (not critical, continuing)." << std::endl;
         }
         
         return true;
@@ -499,7 +496,8 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
             int64_t cam_ns = camera_timestamp_ticks * 1e9 / tick_frequency;
              
             metadata.camera_timestamp = cam_ns;
-            
+            metadata.updateTimetag();
+                        
             // Apply software calibration if PTP not available
             if (!ptp_supported) {
                 int64_t pc_ns = (pc_start.time_since_epoch().count() + 
@@ -553,25 +551,42 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
                     metadata.setExposure(static_cast<uint64_t>(exposure_us * 1000.0)); // store in nanoseconds
                 }
             }
-        
-            // GainAll (try chunk first, fallback to direct read)
+
+            // 1. Try chunk data (only if ChunkData payload)
             bool gain_read = false;
-            GenApi::CFloatPtr chunkGain(chunkDataMap.GetNode("ChunkGainAll"));
-            if (GenApi::IsReadable(chunkGain))
-            {
-                double gain = chunkGain->GetValue();
-                metadata.gain = gain;
-                gain_read = true;
+            if (ptrGrabResult->GetPayloadType() == Pylon::PayloadType_ChunkData) {
+                try {
+                    GenApi::INodeMap& chunkDataMap = ptrGrabResult->GetChunkDataNodeMap();
+                    
+                    GenApi::CFloatPtr chunkGain(chunkDataMap.GetNode("ChunkGain"));
+                    if (!GenApi::IsReadable(chunkGain)) {
+                        chunkGain = chunkDataMap.GetNode("ChunkGainAll");
+                    }
+                    if (GenApi::IsReadable(chunkGain)) {
+                        metadata.gain = chunkGain->GetValue();
+                        gain_read = true;
+                    }
+                }
+                catch (...) {
+                    // Chunk access failed, continue to fallback
+                }
             }
 
-            // Fallback: read Gain directly from camera parameter
-            if (!gain_read)
-            {
-                GenApi::CFloatPtr gainNode(pBasler->GetNodeMap().GetNode("Gain"));
-                if (GenApi::IsReadable(gainNode))
-                {
-                    double gain = gainNode->GetValue();
-                    metadata.gain = gain;
+            // 2. Fallback: direct camera parameters (multiple names)
+            if (!gain_read || metadata.gain < 0) {
+                std::vector<std::string> gain_names = {"Gain", "GainRaw", "GainAll"};
+                for (const auto& name : gain_names) {
+                    try {
+                        GenApi::CFloatPtr gainNode(pBasler->GetNodeMap().GetNode(name.c_str()));
+                        if (GenApi::IsReadable(gainNode)) {
+                            metadata.gain = gainNode->GetValue();
+                            gain_read = true;
+                            break;
+                        }
+                    }
+                    catch (...) {
+                        // Try next name
+                    }
                 }
             }
         }

@@ -67,6 +67,10 @@ uint64_t ImageMetadata::getSyncTimestamp() const {
     return half_exposure_timestamp;
 }
 
+void ImageMetadata::updateTimetag() {
+    this->timetag = getTimeTag() + std::string(" (timestamp for exact time)");
+}
+
 void ImageMetadata::saveYaml(const std::string& filename) const {
     YAML::Node node;
     node["dataset_name"] = dataset_name;
