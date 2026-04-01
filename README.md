@@ -290,8 +290,8 @@ Each session creates a folder with one subfolder per sensor type:
 
 | Library | Required by | Notes |
 |---------|-------------|-------|
-| [Pylon SDK](https://www.baslerweb.com/en/software/pylon/) | `basler_camera_handler` | Proprietary, install manually |
-| [Spinnaker SDK](https://www.flir.com/products/spinnaker-sdk/) | `flir_camera_handler` | Proprietary, install manually |
+| [Pylon SDK](https://www.baslerweb.com/en/software/pylon/) | `basler_camera_handler` | Proprietary, install manually (tested with version 7.4.0 build 38864) |
+| [Spinnaker SDK](https://www.flir.com/products/spinnaker-sdk/) | `flir_camera_handler` | Proprietary, install manually (tested with version Spinnaker 3.1.0.79) |
 | OpenCV | All image nodes | `apt install libopencv-dev` |
 | Flask + SocketIO | GUI package | `pip install -r multiespectral_acquire_gui/requirements.txt` |
 

@@ -62,7 +62,7 @@ std::string model_name = "Unknown";  // Camera model name
 int64_t tick_frequency = 1000000; // ticks per second default 1 MHz
 bool ptp_supported = false;
 bool force_disable_ptp = false;  // Set true to force manual calibration even if PTP available
-int64_t max_exposure_time = 200000; // in microseconds (200 ms default)
+int64_t max_exposure_time = 150000; // in microseconds (200 ms default)
 
 // Global variable to store calibration
 TimestampCalibration g_calibration;
