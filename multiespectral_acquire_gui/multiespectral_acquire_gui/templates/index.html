@@ -1,187 +1,114 @@
 <!DOCTYPE html>
-<html manifest="{{ url_for('static', filename='manifest.appcache') }}">
+<html lang="es">
 <head>
-    <title id="page-title">Camera GUI</title>
-    <!-- Downloaded bootstrap.min for interface to work without internet connection -->
-    <!-- <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"> -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}">
-    <style>
-        #images-container {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            width: 100%;
-            margin: 20px 0;
-        }
-        .image-box {
-            flex: 1;
-            margin: 10px 5px;
-            max-width: none;
-            width: 50%;
-        }
-        .image-box img {
-            width: 100%;
-            height: auto;
-            object-fit: contain;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-        }
-        .orientation-layout {
-            display: none; /* Oculta por defecto */
-        }
-        /* LIDAR elements hidden by default */
-        .lidar-element {
-            display: none !important;
-        }
-        .lidar-element.lidar-visible {
-            display: block !important;  /* Default for image-box */
-        }
-        /* Specific behavior for form rows - need flex for Bootstrap grid */
-        .form-row.lidar-element.lidar-visible {
-            display: flex !important;
-        }
-        /* Specific behavior for columns inside form rows */
-        .form-row .col.lidar-element.lidar-visible {
-            display: flex !important;
-        }
-        @media (orientation: landscape) {
-            #layout-landscape {
-                display: block; /* Muestra el diseño para landscape */
-            }
-        }
-        @media (orientation: portrait) {
-            #layout-portrait {
-                display: block; /* Muestra el diseño para portrait */
-            }
-            #images-container {
-                display: flex;
-                flex-direction: column; /* Imágenes en una columna */
-            }
-            .image-box {
-                max-width: 100%; /* Imágenes ocupan todo el ancho */
-                width: 100%;
-                margin: 10px 0;
-            }
-            .btn {
-                min-height: 100px;
-                align-items: center;
-            }
-        }
-    </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title id="page-title">HITOS Acquisition GUI</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📷</text></svg>">
+    <link rel="stylesheet" href="/hitos_static/css/style.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/local.css') }}">
+    <script>
+        (function(){
+            var t = localStorage.getItem('theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', t);
+            document.documentElement.classList.toggle('dark', t === 'dark');
+        })();
+    </script>
 </head>
 <body>
-    <div class="container">
-        <h1 id="gui-title">Camera GUI</h1>
-        <form id="control-form">
-            <div class="form-row">
-                <div class="col">
-                    <button id="startBtn" class="btn btn-success btn-block" type="submit">Start Acquisition Storage</button>
-                </div>
-                <div class="col">
-                    <button id="stopBtn" class="btn btn-danger btn-block" type="button">Stop Acquisition Storage</button>
-                </div>
-                <div class="col d-flex align-items-center justify-content-center" style="min-height: 38px;"> 
-                    <div class="w-100 text-center">
-                        <strong>Storage status:</strong> <span id="recordingStatus" class="badge badge-secondary" style="font-size: 1.0em; padding: 0.5em 1em;">IDLE</span>
-                    </div>
-                </div>
-            </div>
-            <!-- Layout para landscape -->
-            <div id="layout-landscape" class="orientation-layout">
-                <div class="form-row">
-                    <div class="col">
-                        <label for="frame_rate_lwir_landscape" class="camera1-hz-label">LWIR (Hz):</label>
-                        <input type="text" class="form-control" id="frame_rate_lwir_landscape" name="frame_rate_lwir" readonly>
-                    </div>
-                    <div class="col">
-                        <label for="total_images_received_lwir_landscape" class="camera1-num-label">LWIR (num img):</label>
-                        <input type="text" class="form-control" id="total_images_received_lwir_landscape" name="total_images_received_lwir" readonly>
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="col">
-                        <label for="frame_rate_rgb_landscape" class="camera2-hz-label">RGB (Hz):</label>
-                        <input type="text" class="form-control" id="frame_rate_rgb_landscape" name="frame_rate_rgb" readonly>
-                    </div>
-                    <div class="col">
-                        <label for="total_images_received_rgb_landscape" class="camera2-num-label">RGB (num img):</label>
-                        <input type="text" class="form-control" id="total_images_received_rgb_landscape" name="total_images_received_rgb" readonly>
-                    </div>
-                </div>
-                <!-- LIDAR row - landscape (hidden by default) -->
-                <div class="form-row lidar-element" id="lidar-row-landscape">
-                    <div class="col">
-                        <label for="frame_rate_lidar_landscape" class="lidar-hz-label">LIDAR (Hz):</label>
-                        <input type="text" class="form-control" id="frame_rate_lidar_landscape" name="frame_rate_lidar" readonly>
-                    </div>
-                    <div class="col">
-                        <label for="total_images_received_lidar_landscape" class="lidar-num-label">LIDAR (num img):</label>
-                        <input type="text" class="form-control" id="total_images_received_lidar_landscape" name="total_images_received_lidar" readonly>
-                    </div>
-                </div>
-            </div>
-            <!-- Layout para portrait -->
-            <div id="layout-portrait" class="orientation-layout">
-                <div class="form-row">
-                    <div class="col">
-                        <label for="frame_rate_lwir_portrait" class="camera1-hz-label">LWIR (Hz):</label>
-                        <input type="text" class="form-control" id="frame_rate_lwir_portrait" name="frame_rate_lwir" readonly>
-                    </div>
-                    <div class="col">
-                        <label for="frame_rate_rgb_portrait" class="camera2-hz-label">RGB (Hz):</label>
-                        <input type="text" class="form-control" id="frame_rate_rgb_portrait" name="frame_rate_rgb" readonly>
-                    </div>
-                    <!-- LIDAR column - portrait (hidden by default) -->
-                    <div class="col lidar-element" id="lidar-col-portrait-hz">
-                        <label for="frame_rate_lidar_portrait" class="lidar-hz-label">LIDAR (Hz):</label>
-                        <input type="text" class="form-control" id="frame_rate_lidar_portrait" name="frame_rate_lidar" readonly>
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="col">
-                        <label for="total_images_received_lwir_portrait" class="camera1-num-label">LWIR (num img):</label>
-                        <input type="text" class="form-control" id="total_images_received_lwir_portrait" name="total_images_received_lwir" readonly>
-                    </div>
-                    <div class="col">
-                        <label for="total_images_received_rgb_portrait" class="camera2-num-label">RGB (num img):</label>
-                        <input type="text" class="form-control" id="total_images_received_rgb_portrait" name="total_images_received_rgb" readonly>
-                    </div>
-                    <!-- LIDAR column - portrait (hidden by default) -->
-                    <div class="col lidar-element" id="lidar-col-portrait-num">
-                        <label for="total_images_received_lidar_portrait" class="lidar-num-label">LIDAR (num img):</label>
-                        <input type="text" class="form-control" id="total_images_received_lidar_portrait" name="total_images_received_lidar" readonly>
-                    </div>
-                </div>
-            </div>
-        </form>
-        <div id="images-container">
-            <div class="image-box">
-                <h3 id="camera1-img-title">LWIR Img</h3>
-                <img src="" id="lwir_image" class="img-fluid">
-            </div>
-            <div class="image-box">
-                <h3 id="camera2-img-title">RGB Img</h3>
-                <img src="" id="rgb_image" class="img-fluid">
-            </div>
-            <!-- LIDAR image box (hidden by default) -->
-            <div class="image-box lidar-element" id="lidar-image-box">
-                <h3 id="lidar-img-title">LIDAR Img</h3>
-                <img src="" id="lidar_image" class="img-fluid">
+<div class="container">
+
+    <header class="header">
+        <div class="logo">
+            <img src="/hitos_static/arvc_logo.png" alt="ARVC" class="logo-img">
+            <div class="logo-text">
+                <h1 id="gui-title">HITOS Acquisition GUI</h1>
+                <p class="logo-subtitle">Multiespectral Camera System — ARVC/EEHA</p>
             </div>
         </div>
-        
-        <!-- LIDAR Topic Selector (always visible, at the bottom) -->
-        <div id="lidar-topic-selector">
-            <hr>
-            <div class="form-group">
-                <label for="lidar_topic_select"><strong>LIDAR Image Source:</strong></label>
-                <select class="form-control" id="lidar_topic_select">
+        <div class="header-info">
+            <span class="acq-status" id="recordingStatus" data-status="idle">IDLE</span>
+            <form id="control-form" style="display:contents">
+                <button id="startBtn" class="btn-acq btn-acq-start" type="submit">▶ Start Recording</button>
+            </form>
+            <button id="stopBtn" class="btn-acq btn-acq-stop" type="button">■ Stop Recording</button>
+        </div>
+    </header>
+
+    <!-- Camera stats — one group per camera, aligns with image grid below -->
+    <div class="stats-bar">
+        <div class="stat-group">
+            <div class="stat-item">
+                <span class="stat-label camera1-hz-label">LWIR Camera Hz</span>
+                <span class="stat-value" id="frame_rate_lwir">—</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label camera1-num-label">LWIR Camera frames</span>
+                <span class="stat-value" id="total_images_received_lwir">—</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label camera1-saved-label">LWIR Saved</span>
+                <span class="stat-value" id="saved_frames_camera1">—</span>
+            </div>
+        </div>
+        <div class="stat-group">
+            <div class="stat-item">
+                <span class="stat-label camera2-hz-label">Visible Camera Hz</span>
+                <span class="stat-value" id="frame_rate_rgb">—</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label camera2-num-label">Visible Camera frames</span>
+                <span class="stat-value" id="total_images_received_rgb">—</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label camera2-saved-label">Visible Saved</span>
+                <span class="stat-value" id="saved_frames_camera2">—</span>
+            </div>
+        </div>
+        <div class="stat-group lidar-element">
+            <div class="stat-item">
+                <span class="stat-label lidar-hz-label">LIDAR Hz</span>
+                <span class="stat-value" id="frame_rate_lidar">—</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label lidar-num-label">LIDAR frames</span>
+                <span class="stat-value" id="total_images_received_lidar">—</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label lidar-saved-label">LIDAR Saved</span>
+                <span class="stat-value" id="saved_frames_lidar">—</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Camera images -->
+    <div class="images-grid" id="images-container">
+        <div class="image-card">
+            <div class="image-card-header">
+                <span id="camera1-img-title">LWIR Camera</span>
+            </div>
+            <div class="image-card-body">
+                <img src="/stream/camera1" id="lwir_image" class="camera-img" alt="LWIR">
+            </div>
+        </div>
+        <div class="image-card">
+            <div class="image-card-header">
+                <span id="camera2-img-title">Visible Camera</span>
+            </div>
+            <div class="image-card-body">
+                <img src="/stream/camera2" id="rgb_image" class="camera-img" alt="Visible">
+            </div>
+        </div>
+        <!-- LIDAR card: selector integrated in header -->
+        <div class="image-card lidar-element" id="lidar-image-box">
+            <div class="image-card-header">
+                <span id="lidar-img-title">LIDAR</span>
+                <select id="lidar_topic_select" class="topic-select-inline">
                     {% if lidar_topic_options %}
                         {% for option in lidar_topic_options %}
                             <option value="{{ option.topic }}" {% if option.topic == current_lidar_topic %}selected{% endif %}>{{ option.label }}</option>
                         {% endfor %}
                     {% else %}
-                        <!-- Default options if not provided by ROS parameters -->
                         <option value="/Multiespectral/ouster/range_image_cropped_sync">Range Image</option>
                         <option value="/Multiespectral/ouster/reflec_image_cropped_sync" selected>Reflectivity Image</option>
                         <option value="/Multiespectral/ouster/signal_image_cropped_sync">Signal Image</option>
@@ -189,212 +116,134 @@
                     {% endif %}
                 </select>
             </div>
+            <div class="image-card-body">
+                <img src="/stream/lidar" id="lidar_image" class="camera-img" alt="LIDAR">
+            </div>
         </div>
     </div>
 
-    <!-- Downloaded js files for interface to work without internet connection -->
-    <script src="{{ url_for('static', filename='js/jquery-3.5.1.min.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/socket.io.min.js') }}"></script> 
-    <!-- <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
-    <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script> -->
-    <script>
-        $(document).ready(function() {
-            var socket = io.connect('http://' + document.domain + ':' + location.port);
-            var lidarAvailable = false;
+    <footer class="footer">
+        <p>
+            <a href="https://github.com/enheragu/multiespectral_acquire" target="_blank" rel="noopener">HITOS Acquisition GUI v1.0</a>
+            —
+            <a href="https://arvc.umh.es/index.php?lang=en" target="_blank" rel="noopener">ARVC</a>
+            /
+            <a href="https://enheragu.github.io/" target="_blank" rel="noopener">EEHA</a>
+        </p>
+    </footer>
+</div>
 
-            $("#control-form").submit(function(event) {
-                event.preventDefault();
-                $.post("/start", $(this).serialize(), function(data) {
-                    $("#status").text(data.status);
-                });
-            });
+<div data-theme-toggle-host></div>
 
-            $("#stopBtn").click(function() {
-                $.post("/stop", function(data) {
-                    $("#status").text(data.status);
-                });
-            });
+<script src="{{ url_for('static', filename='js/jquery-3.5.1.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/socket.io.min.js') }}"></script>
+<script src="/hitos_static/js/ui-core.js"></script>
+<script>
+$(document).ready(function() {
+    if (window.SharedUiCore) SharedUiCore.initThemeToggle();
 
-            function sendImageSize() {
-                var targetSize = { width: 640, height: 480 };
-                
-                console.log('[sendImageSize] Using fixed size for all images:', targetSize);
-                
-                socket.emit('image_size', { 
-                    lwir: targetSize, 
-                    rgb: targetSize, 
-                    lidar: targetSize 
+    var socket = io.connect('http://' + document.domain + ':' + location.port);
+    var lidarAvailable = false;
+
+    // ── Acquisition controls ─────────────────────────────────────────────
+    $('#control-form').submit(function(event) {
+        event.preventDefault();
+        $.post('/start', $(this).serialize());
+    });
+
+    $('#stopBtn').click(function() {
+        $.post('/stop');
+    });
+
+    // ── Image size ───────────────────────────────────────────────────────
+    function sendImageSize() {
+        var targetSize = { width: 800, height: 600 };
+        socket.emit('image_size', { lwir: targetSize, rgb: targetSize, lidar: targetSize });
+    }
+
+    // ── LIDAR visibility ─────────────────────────────────────────────────
+    function updateLidarVisibility(available) {
+        if (available !== lidarAvailable) {
+            lidarAvailable = available;
+            if (lidarAvailable) {
+                $('.lidar-element').addClass('lidar-visible');
+            } else {
+                $('.lidar-element').removeClass('lidar-visible');
+            }
+            setTimeout(sendImageSize, 100);
+        }
+    }
+
+    sendImageSize();
+
+    // ── Socket data update ───────────────────────────────────────────────
+    socket.on('update_data', function(data) {
+        if (data.gui_title) {
+            $('#gui-title').text(data.gui_title);
+            $('#page-title').text(data.gui_title);
+        }
+        if (data.camera1_name) {
+            $('#camera1-img-title').text(data.camera1_name);
+            $('.camera1-hz-label').text(data.camera1_name + ' Hz');
+            $('.camera1-num-label').text(data.camera1_name + ' frames');
+            $('.camera1-saved-label').text(data.camera1_name + ' saved');
+        }
+        if (data.camera2_name) {
+            $('#camera2-img-title').text(data.camera2_name);
+            $('.camera2-hz-label').text(data.camera2_name + ' Hz');
+            $('.camera2-num-label').text(data.camera2_name + ' frames');
+            $('.camera2-saved-label').text(data.camera2_name + ' saved');
+        }
+        if (data.lidar_name) {
+            $('#lidar-img-title').text(data.lidar_name);
+            $('.lidar-hz-label').text(data.lidar_name + ' Hz');
+            $('.lidar-num-label').text(data.lidar_name + ' frames');
+            $('.lidar-saved-label').text(data.lidar_name + ' saved');
+        }
+
+        updateLidarVisibility(data.lidar_available || false);
+
+        // Recording status
+        var status = (data.recording_status || 'IDLE').toLowerCase().replace(/ /g, '-');
+        $('#recordingStatus').attr('data-status', status).text(data.recording_status || 'IDLE');
+
+        // Stats
+        $('#frame_rate_lwir').text(data.frame_rate_camera1 || '—');
+        $('#total_images_received_lwir').text(data.total_images_received_camera1 || '—');
+        $('#saved_frames_camera1').text(data.recording_enabled ? (data.saved_frames_camera1 || 0) : '—');
+        $('#frame_rate_rgb').text(data.frame_rate_camera2 || '—');
+        $('#total_images_received_rgb').text(data.total_images_received_camera2 || '—');
+        $('#saved_frames_camera2').text(data.recording_enabled ? (data.saved_frames_camera2 || 0) : '—');
+
+        // Images stream via MJPEG (<img src="/stream/...">), not over Socket.IO.
+
+        // LIDAR
+        if (data.lidar_available) {
+            $('#frame_rate_lidar').text(data.frame_rate_lidar || '—');
+            $('#total_images_received_lidar').text(data.total_images_received_lidar || '—');
+            $('#saved_frames_lidar').text(data.recording_enabled ? (data.saved_frames_lidar || 0) : '—');
+        }
+
+        // LIDAR topic dropdown (only rebuild if options actually changed)
+        if (data.lidar_topic_options && data.lidar_topic_options.length > 0) {
+            var dropdown = $('#lidar_topic_select');
+            var currentOptions = dropdown.find('option').map(function() { return $(this).val(); }).get();
+            var newOptions = data.lidar_topic_options.map(function(o) { return o.topic; });
+            if (JSON.stringify(currentOptions.sort()) !== JSON.stringify(newOptions.slice().sort())) {
+                var saved = data.current_lidar_topic || dropdown.val();
+                dropdown.empty();
+                $.each(data.lidar_topic_options, function(_, o) {
+                    dropdown.append($('<option>', { value: o.topic, text: o.label, selected: o.topic === saved }));
                 });
             }
+        }
+    });
 
-            function updateLidarVisibility(available) {
-                if (available !== lidarAvailable) {
-                    lidarAvailable = available;
-                    if (lidarAvailable) {
-                        $('.lidar-element').addClass('lidar-visible');
-                        $('.lidar-flex-element').addClass('lidar-visible');
-                    } else {
-                        $('.lidar-element').removeClass('lidar-visible');
-                        $('.lidar-flex-element').removeClass('lidar-visible');
-                    }
-                    setTimeout(sendImageSize, 100);
-                }
-            }
-
-            sendImageSize();
-
-            socket.on('update_data', function(data) {
-                if (data.gui_title) {
-                    $('#gui-title').text(data.gui_title);
-                    $('#page-title').text(data.gui_title);
-                }
-                
-                if (data.camera1_name) {
-                    $('#camera1-img-title').text(data.camera1_name + ' Img');
-                    $('.camera1-hz-label').text(data.camera1_name + ' (Hz):');
-                    $('.camera1-num-label').text(data.camera1_name + ' (Num img):');
-                }
-                if (data.camera2_name) {
-                    $('#camera2-img-title').text(data.camera2_name + ' Img');
-                    $('.camera2-hz-label').text(data.camera2_name + ' (Hz):');
-                    $('.camera2-num-label').text(data.camera2_name + ' (Num img):');
-                }
-                if (data.lidar_name) {
-                    $('#lidar-img-title').text(data.lidar_name + ' Image');
-                    $('.lidar-hz-label').text(data.lidar_name + ' (Hz):');
-                    $('.lidar-num-label').text(data.lidar_name + ' (Num img):');
-                }
-                
-                updateLidarVisibility(data.lidar_available || false);
-                
-                var statusBadge = $('#recordingStatus');
-                var status = data.recording_status || 'IDLE';
-                
-                statusBadge.removeClass('badge-secondary badge-success badge-warning badge-danger badge-info');
-                
-                switch(status) {
-                    case 'RECORDING':
-                        statusBadge.addClass('badge-success');
-                        statusBadge.text('RECORDING');
-                        break;
-                    case 'RECORDING REQUESTED':
-                        statusBadge.addClass('badge-warning');
-                        statusBadge.text('RECORDING REQUESTED');
-                        break;
-                    case 'STOP REQUESTED':
-                        statusBadge.addClass('badge-info');
-                        statusBadge.text('STOP REQUESTED');
-                        break;
-                    case 'IDLE':
-                    default:
-                        statusBadge.addClass('badge-secondary');
-                        statusBadge.text('IDLE');
-                        break;
-                }
-                
-                // Get data from server
-                var frameRate1 = data.frame_rate_camera1 || '';
-                var frameRate2 = data.frame_rate_camera2 || '';
-                var totalImg1 = data.total_images_received_camera1 || '';
-                var totalImg2 = data.total_images_received_camera2 || '';
-                var imgPath1 = data.camera1_img_path || '';
-                var imgPath2 = data.camera2_img_path || '';
-                
-                // Update landscape layout
-                $('#frame_rate_lwir_landscape').val(frameRate1);
-                $('#total_images_received_lwir_landscape').val(totalImg1);
-                $('#frame_rate_rgb_landscape').val(frameRate2);
-                $('#total_images_received_rgb_landscape').val(totalImg2);
-
-                // Update portrait layout
-                $('#frame_rate_lwir_portrait').val(frameRate1);
-                $('#total_images_received_lwir_portrait').val(totalImg1);
-                $('#frame_rate_rgb_portrait').val(frameRate2);
-                $('#total_images_received_rgb_portrait').val(totalImg2);
-                
-                // Update images
-                $('#lwir_image').attr('src', 'data:image/jpeg;base64,' + imgPath1);
-                $('#rgb_image').attr('src', 'data:image/jpeg;base64,' + imgPath2);
-                
-                // LIDAR data (only if available)
-                if (data.lidar_available) {
-                    $('#frame_rate_lidar_landscape').val(data.frame_rate_lidar);
-                    $('#total_images_received_lidar_landscape').val(data.total_images_received_lidar);
-                    $('#frame_rate_lidar_portrait').val(data.frame_rate_lidar);
-                    $('#total_images_received_lidar_portrait').val(data.total_images_received_lidar);
-                    if (data.lidar_img_path) {
-                        $('#lidar_image').attr('src', 'data:image/jpeg;base64,' + data.lidar_img_path);
-                    }
-                }
-                
-                // Update LIDAR topic options if provided
-                // Only rebuild dropdown if options actually changed (avoid resetting user selection)
-                if (data.lidar_topic_options && data.lidar_topic_options.length > 0) {
-                    var dropdown = $('#lidar_topic_select');
-                    var currentOptions = [];
-                    dropdown.find('option').each(function() {
-                        currentOptions.push($(this).val());
-                    });
-                    
-                    // Check if options changed
-                    var newOptions = data.lidar_topic_options.map(function(opt) { return opt.topic; });
-                    var optionsChanged = JSON.stringify(currentOptions.sort()) !== JSON.stringify(newOptions.sort());
-                    
-                    if (optionsChanged) {
-                        // Options changed - rebuild dropdown
-                        var currentSelection = dropdown.val();
-                        var newSelection = data.current_lidar_topic || currentSelection;
-                        
-                        dropdown.empty();
-                        
-                        $.each(data.lidar_topic_options, function(index, option) {
-                            var isSelected = (option.topic === newSelection) ? 'selected' : '';
-                            dropdown.append('<option value="' + option.topic + '" ' + isSelected + '>' + option.label + '</option>');
-                        });
-                        
-                        console.log('[GUI] LIDAR topic options updated:', newOptions);
-                    }
-                    // If options haven't changed, don't touch the dropdown (preserves user selection)
-                }
-            });
-
-            window.addEventListener("orientationchange", function() {
-                const landscapeLayout = document.getElementById('layout-landscape');
-                const portraitLayout = document.getElementById('layout-portrait');
-                if (window.innerHeight > window.innerWidth) {
-                    // Portrait
-                    landscapeLayout.style.display = 'none';
-                    portraitLayout.style.display = 'block';
-                } else {
-                    // Landscape
-                    landscapeLayout.style.display = 'block';
-                    portraitLayout.style.display = 'none';
-                }
-            });
-
-            // Ejecutar una vez al cargar la página
-            window.dispatchEvent(new Event('orientationchange'));
-
-            // Handle LIDAR topic selection change
-            $('#lidar_topic_select').change(function() {
-                console.log('='.repeat(80));
-                console.log('[GUI] ============ DROPDOWN CHANGED ============');
-                var selectedTopic = $(this).val();
-                var selectedLabel = $(this).find('option:selected').text();
-                console.log('[GUI] Selected topic:', selectedTopic);
-                console.log('[GUI] Selected label:', selectedLabel);
-                console.log('[GUI] Emitting change_lidar_topic to server...');
-                
-                socket.emit('change_lidar_topic', { topic: selectedTopic });
-                
-                console.log('[GUI] Event emitted successfully');
-                console.log('='.repeat(80));
-                
-                // Visual confirmation with label name
-                alert('Changing LIDAR source to:\n' + selectedLabel + '\n\nTopic: ' + selectedTopic);
-            });
-
-        });
-    </script>
+    // ── LIDAR topic change ───────────────────────────────────────────────
+    $('#lidar_topic_select').change(function() {
+        socket.emit('change_lidar_topic', { topic: $(this).val() });
+    });
+});
+</script>
 </body>
 </html>

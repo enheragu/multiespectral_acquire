@@ -113,49 +113,61 @@ std::string getType()
 
 TimestampCalibration calibrateTimestamps(int num_samples = 30) {
     std::vector<int64_t> camera_times, pc_times;
-    
+
+    // On failure return an UNINITIALIZED calibration (initialized=false) so the
+    // caller can retry or abort init. The previous behaviour (slope=1, offset=0,
+    // initialized=true) made the node publish camera-boot-relative timestamps;
+    // since the Basler is the main sync trigger that poisoned every buffer
+    // handler until the adaptive clock-step correction converged.
+
     std::cout << "[BaslerAdapter::"<<getName()<<"::calibrateTimestamps] Waiting for camera stabilization (2 seconds)..." << std::endl;
     std::this_thread::sleep_for(std::chrono::seconds(2));
-    
+
     std::cout << "[BaslerAdapter::"<<getName()<<"::calibrateTimestamps] Capturing " << num_samples << " samples for calibration..." << std::endl;
-    
+
     for(int i = 0; i < num_samples; i++) {
-        auto pc_start = std::chrono::system_clock::now();
-        
-        // Trigger + capture
-        pBasler->ExecuteSoftwareTrigger();
-        Pylon::CGrabResultPtr ptrGrabResult;
-        pBasler->RetrieveResult(1000, ptrGrabResult);
-        
-        if(ptrGrabResult->GrabSucceeded()) {
-            int64_t cam_ticks = ptrGrabResult->GetTimeStamp();
-            auto pc_end = std::chrono::system_clock::now();
-            
-            // Average PC time (reduce jitter)
-            int64_t pc_ns = (pc_start.time_since_epoch().count() + 
-                           pc_end.time_since_epoch().count()) / 2;
-            
-            camera_times.push_back(cam_ticks);
-            pc_times.push_back(pc_ns);
+        try {
+            auto pc_start = std::chrono::system_clock::now();
+
+            pBasler->ExecuteSoftwareTrigger();
+            Pylon::CGrabResultPtr ptrGrabResult;
+            pBasler->RetrieveResult(1000, ptrGrabResult);
+
+            if(ptrGrabResult && ptrGrabResult->GrabSucceeded()) {
+                int64_t cam_ticks = ptrGrabResult->GetTimeStamp();
+                // The camera latches its timestamp at exposure START (FrameStart
+                // trigger), which happens right after ExecuteSoftwareTrigger().
+                // pc_start is therefore the correct estimator. The old midpoint
+                // (pc_start+pc_end)/2 was biased late by half of
+                // exposure+readout+transfer — up to ~100 ms with auto-exposure
+                // at its 200 ms limit, and variable with scene brightness.
+                int64_t pc_ns = pc_start.time_since_epoch().count();
+                camera_times.push_back(cam_ticks);
+                pc_times.push_back(pc_ns);
+            }
         }
-        
-        // Space out samples (except the last one)
+        catch (const Pylon::GenericException &e) {
+            std::cerr << "[BaslerAdapter::"<<getName()<<"::calibrateTimestamps] Pylon exception on sample "
+                      << i << ": " << e.GetDescription() << ". Aborting calibration." << std::endl;
+            return TimestampCalibration();
+        }
+        catch (...) {
+            std::cerr << "[BaslerAdapter::"<<getName()<<"::calibrateTimestamps] Unknown exception on sample "
+                      << i << ". Aborting calibration." << std::endl;
+            return TimestampCalibration();
+        }
+
         if(i < num_samples - 1) {
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
     }
-    
+
     if(camera_times.size() < 3) {
-        std::cerr << "[BaslerAdapter::"<<getName()<<"::calibrateTimestamps] ERROR: Not enough valid samples (" 
-                  << camera_times.size() << "). Using default calibration." << std::endl;
-        TimestampCalibration default_cal;
-        default_cal.slope = 1.0;
-        default_cal.offset_ns = 0;
-        default_cal.initialized = true;
-        return default_cal;
+        std::cerr << "[BaslerAdapter::"<<getName()<<"::calibrateTimestamps] ERROR: Not enough valid samples ("
+                  << camera_times.size() << ")." << std::endl;
+        return TimestampCalibration();
     }
-    
-    // Use performInitialCalibration from utils
+
     return performInitialCalibration(camera_times, pc_times, tick_frequency, getName());
 }
 
@@ -172,57 +184,139 @@ bool initCamera(int frame_rate, std::string camera_ip)
         std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] Initialize Pylon runtime for basler camera (frame_rate " << frame_rate << "; camera_ip " << camera_ip << ")." << std::endl;
         Pylon::PylonInitialize();
         
-        // Enumerate devices and find by IP
+        // Enumerate devices and find by IP.
+        // Retry several times: the camera may not yet have responded to the GigE
+        // Vision discovery broadcast (e.g. still booting, or briefly resetting after
+        // a previous control-channel owner disconnected).
         Pylon::CTlFactory& tl_factory = Pylon::CTlFactory::GetInstance();
         Pylon::DeviceInfoList_t device_list;
-        
-        if (0 == tl_factory.EnumerateDevices(device_list))
+        const int kEnumRetries = 5;
+        const int kEnumRetryMs = 3000;
+        for (int attempt = 0; attempt <= kEnumRetries; ++attempt)
         {
-            std::cerr << "[BaslerAdapter::"<<getName()<<"::initCamera] No available camera devices." << std::endl;
-            return false;
-        }
-        else
-        {
-            bool found_desired_device = false;
-            Pylon::DeviceInfoList_t::const_iterator it;
-            for (it = device_list.begin(); it != device_list.end(); ++it)
+            device_list.clear();
+            if (0 == tl_factory.EnumerateDevices(device_list))
             {
-                std::string device_ip_found(it->GetIpAddress());
-                if (0 == camera_ip.compare(device_ip_found))
+                if (attempt < kEnumRetries)
                 {
-                    std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] Found camera device:"
-                    << " Device Model: " << it->GetModelName() << "; "
-                    << " with Device User Id: " << it->GetUserDefinedName() << std::endl;
-                    
-                    pBasler = std::unique_ptr<Pylon::CBaslerUniversalInstantCamera>(new Pylon::CBaslerUniversalInstantCamera(tl_factory.CreateDevice(*it)));
-                    found_desired_device = true;
-                    break;
+                    std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] No cameras found, waiting "
+                              << kEnumRetryMs/1000 << "s before retry ("
+                              << attempt+1 << "/" << kEnumRetries << ")..." << std::endl;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(kEnumRetryMs));
+                }
+                else
+                {
+                    std::cerr << "[BaslerAdapter::"<<getName()<<"::initCamera] No available camera devices after "
+                              << kEnumRetries << " attempts." << std::endl;
+                    return false;
                 }
             }
-
-            if (!found_desired_device)
+            else
             {
-                std::cerr << "[BaslerAdapter::"<<getName()<<"::initCamera] Could not find camera with configured IP: " << camera_ip << std::endl;
-                return false;
+                break;
             }
         }
 
-        if (!pBasler)
+        // Find the device with the configured IP in the enumerated list.
+        Pylon::DeviceInfoList_t::const_iterator target_dev = device_list.end();
+        for (auto it = device_list.begin(); it != device_list.end(); ++it)
         {
-            std::cerr << "[BaslerAdapter::"<<getName()<<"::initCamera] Camera with configured IP ("<<camera_ip<<") was not found."  << std::endl;
+            if (camera_ip == std::string(it->GetIpAddress()))
+            {
+                target_dev = it;
+                break;
+            }
+        }
+        if (target_dev == device_list.end())
+        {
+            std::cerr << "[BaslerAdapter::"<<getName()<<"::initCamera] Could not find camera with configured IP: " << camera_ip << std::endl;
             return false;
         }
-        else
+        std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] Found camera device:"
+                  << " Device Model: " << target_dev->GetModelName() << ";"
+                  << " Device User Id: " << target_dev->GetUserDefinedName() << std::endl;
+
+        // CreateDevice + constructor may download and parse the camera's GenICam XML.
+        // ParseXmlBuffer can fail if the camera just power-cycled and its XML server
+        // isn't ready. Retry up to 5× with 3 s gaps (same pattern as EnumerateDevices).
+        const int kOpenRetries = 5;
+        const int kOpenRetryMs = 3000;
+        for (int attempt = 0; attempt <= kOpenRetries; ++attempt)
         {
-            std::cerr << "[BaslerAdapter::"<<getName()<<"::initCamera] Opening camera with: " << std::endl;
-            std::cout << "\t\t· Model Name " << pBasler->GetDeviceInfo().GetModelName() << std::endl;
-            std::cout << "\t\t· Friendly Name: " << pBasler->GetDeviceInfo().GetFriendlyName() << std::endl;
-            std::cout << "\t\t· Current IP Addr: " << pBasler->GevCurrentIPAddress.ToStringOrDefault("<not readable>") << std::endl;
-            std::cout << "\t\t· Requested IP: " << camera_ip << std::endl;
+            try
+            {
+                pBasler.reset(new Pylon::CBaslerUniversalInstantCamera(
+                    tl_factory.CreateDevice(*target_dev)));
+                pBasler->Open();
+                break;   // success — XML parsed, device open
+            }
+            catch (Pylon::GenericException& e)
+            {
+                pBasler.reset();  // release before retry
+                if (attempt < kOpenRetries)
+                {
+                    std::cerr << "[BaslerAdapter::"<<getName()<<"::initCamera] CreateDevice/Open failed ("
+                              << e.GetDescription() << "), waiting "
+                              << kOpenRetryMs/1000 << "s before retry ("
+                              << attempt+1 << "/" << kOpenRetries << ")..." << std::endl;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(kOpenRetryMs));
+                }
+                else
+                {
+                    std::cerr << "[BaslerAdapter::"<<getName()<<"::initCamera] CreateDevice/Open failed after "
+                              << kOpenRetries << " attempts: " << e.GetDescription() << std::endl;
+                    return false;
+                }
+            }
+        }
+        if (!pBasler)
+        {
+            std::cerr << "[BaslerAdapter::"<<getName()<<"::initCamera] Camera object null after open." << std::endl;
+            return false;
+        }
+        std::cerr << "[BaslerAdapter::"<<getName()<<"::initCamera] Camera opened: "
+                  << pBasler->GetDeviceInfo().GetModelName() << std::endl;
+
+        // Set heartbeat timeout to 10 s. Pylon's background heartbeat thread fires
+        // every timeout/2 = 5 s. 3 s was too tight at first boot when CPU load is
+        // high and the heartbeat thread could be delayed past the deadline, causing
+        // the camera to drop the control channel after calibration. After a crash
+        // the camera releases at most 10 s later; respawn_delay is set to 15 s so
+        // the new process always opens a clean channel.
+        // NOTE: do NOT raise this above respawn_delay (15 s) or the respawned
+        // process will collide with the old GVCP session (0xE1018006).
+        TRY_CONFIG(pBasler->GevHeartbeatTimeout)
+        {
+            pBasler->GevHeartbeatTimeout.SetValue(10000);
+            std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] Heartbeat timeout set to 10000 ms." << std::endl;
         }
 
-        pBasler->Open();
-        
+        // Explicitly lock the streaming packet size to 1500 bytes (standard Ethernet
+        // MTU). Without this the camera keeps whatever was last written to its flash
+        // (e.g. 8192 bytes from a PylonViewer/GigEConfigurator session). If the
+        // Mokerlink switch cannot handle jumbo frames that silently drops all image
+        // data. 1500 bytes is always safe; raise it only after confirming the switch
+        // supports a larger MTU end-to-end.
+        TRY_CONFIG(pBasler->GevSCPSPacketSize)
+        {
+            pBasler->GevSCPSPacketSize.SetValue(1500);
+            std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] Streaming packet size set to 1500 bytes." << std::endl;
+        }
+
+        // Inter-packet delay (GevSCPD, in timestamp ticks: 8 ns at 125 MHz).
+        // Without it each 1.9 MB frame bursts ~1300 packets at line rate; if the
+        // FLIR (30 Hz) bursts at the same moment the Mokerlink switch must buffer
+        // one of the streams and its shared buffer is far smaller than a frame,
+        // so it tail-drops — including GVCP control packets, which is a plausible
+        // cause of the recurring "Control channel not open" drops.
+        // 4500 ticks = 36 us gap → ~250 Mbit/s effective → ~60 ms per frame,
+        // irrelevant at the 1 Hz trigger rate.
+        TRY_CONFIG(pBasler->GevSCPD)
+        {
+            pBasler->GevSCPD.SetValue(4500);
+            std::cout << "[BaslerAdapter::"<<getName()<<"::initCamera] Inter-packet delay (GevSCPD) set to 4500 ticks (~36 us)." << std::endl;
+        }
+
         // Store model name for logging
         model_name = std::string(pBasler->GetDeviceInfo().GetModelName());
 
@@ -352,20 +446,51 @@ bool initCamera(int frame_rate, std::string camera_ip)
 bool beginAcquisition()
 {
     CHECK_POINTER(pBasler);
-    if (!pBasler->IsGrabbing())
+    try
     {
-        std::cout << "[BaslerAdapter::"<<getName()<<"::beginAcquisition] Begin acquisition." << std::endl;
-        pBasler->StartGrabbing(Pylon::GrabStrategy_LatestImageOnly);
+        if (!pBasler->IsGrabbing())
+        {
+            std::cout << "[BaslerAdapter::"<<getName()<<"::beginAcquisition] Begin acquisition." << std::endl;
+            pBasler->StartGrabbing(Pylon::GrabStrategy_LatestImageOnly);
+        }
+        else
+        {
+            std::cout << "[BaslerAdapter::"<<getName()<<"::beginAcquisition] Acquisition already started." << std::endl;
+        }
     }
-    else
+    catch (const Pylon::GenericException &e)
     {
-        std::cout << "[BaslerAdapter::"<<getName()<<"::beginAcquisition] Acquisition already started." << std::endl;
+        std::cerr << "[BaslerAdapter::"<<getName()<<"::beginAcquisition] Pylon exception: " << e.GetDescription() << std::endl;
+        return false;
+    }
+    catch (...)
+    {
+        std::cerr << "[BaslerAdapter::"<<getName()<<"::beginAcquisition] Unknown exception starting grab." << std::endl;
+        return false;
     }
 
-    // Software timestamp calibration if PTP not available
+    // Software timestamp calibration if PTP not available.
+    // Retry in-process a few times (the camera may still be settling after a
+    // reboot/respawn). If it never succeeds, FAIL init so the node respawns
+    // cleanly instead of publishing garbage timestamps as the main trigger.
     if (!ptp_supported)
     {
-        g_calibration = calibrateTimestamps(30);
+        const int kCalibAttempts = 3;
+        for (int attempt = 1; attempt <= kCalibAttempts; ++attempt)
+        {
+            g_calibration = calibrateTimestamps(30);
+            if (g_calibration.initialized) break;
+            std::cerr << "[BaslerAdapter::"<<getName()<<"::beginAcquisition] Timestamp calibration failed (attempt "
+                      << attempt << "/" << kCalibAttempts << ")." << std::endl;
+            if (attempt < kCalibAttempts)
+                std::this_thread::sleep_for(std::chrono::seconds(5));
+        }
+        if (!g_calibration.initialized)
+        {
+            std::cerr << "[BaslerAdapter::"<<getName()<<"::beginAcquisition] Timestamp calibration failed after "
+                      << kCalibAttempts << " attempts — failing init (node will respawn)." << std::endl;
+            return false;
+        }
     }
     return true;
 }
@@ -376,20 +501,32 @@ bool beginAcquisition()
 bool endAcquisition()
 {
     CHECK_POINTER(pBasler);
-    if (pBasler->IsGrabbing())
+    try
     {
-        std::cout << "[BaslerAdapter::"<<getName()<<"::endAcquisition] End acquisition." << std::endl;
-        
-        // Show final calibration statistics
-        if (!ptp_supported && g_calibration.initialized) {
-            g_calibration.printFinalStats();
+        if (pBasler->IsGrabbing())
+        {
+            std::cout << "[BaslerAdapter::"<<getName()<<"::endAcquisition] End acquisition." << std::endl;
+
+            if (!ptp_supported && g_calibration.initialized) {
+                g_calibration.printFinalStats();
+            }
+
+            pBasler->StopGrabbing();
         }
-        
-        pBasler->StopGrabbing();
+        else
+        {
+            std::cout << "[BaslerAdapter::"<<getName()<<"::endAcquisition] Acquisition is not running." << std::endl;
+        }
     }
-    else
+    catch (const Pylon::GenericException &e)
     {
-        std::cout << "[BaslerAdapter::"<<getName()<<"::endAcquisition] Acquisition is not running." << std::endl;
+        std::cerr << "[BaslerAdapter::"<<getName()<<"::endAcquisition] Pylon exception: " << e.GetDescription() << std::endl;
+        return false;
+    }
+    catch (...)
+    {
+        std::cerr << "[BaslerAdapter::"<<getName()<<"::endAcquisition] Unknown exception stopping grab." << std::endl;
+        return false;
     }
     return true;
 }
@@ -475,9 +612,7 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
         // Wait for an image and then retrieve it. A timeout of 1000 ms is used.
         pBasler->ExecuteSoftwareTrigger();
         pBasler->RetrieveResult( 1000, ptrGrabResult, Pylon::TimeoutHandling_ThrowException);
-        
-        auto pc_end = std::chrono::system_clock::now();
-        
+
         // Image grabbed successfully?
         if (!ptrGrabResult)
         {
@@ -497,11 +632,17 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
              
             metadata.camera_timestamp = cam_ns;
             metadata.updateTimetag();
-                        
+
             // Apply software calibration if PTP not available
             if (!ptp_supported) {
-                int64_t pc_ns = (pc_start.time_since_epoch().count() + 
-                               pc_end.time_since_epoch().count()) / 2;
+                if (!g_calibration.initialized) {
+                    // Should not happen (beginAcquisition fails without a valid
+                    // calibration) — refuse to publish uncalibrated timestamps.
+                    std::cerr << "[BaslerAdapter::"<<getName()<<"::acquireImage] No valid timestamp calibration." << std::endl;
+                    return false;
+                }
+                // pc_start = exposure start estimator (see calibrateTimestamps).
+                int64_t pc_ns = pc_start.time_since_epoch().count();
                 metadata.camera_timestamp = g_calibration.offset_ns + cam_ns * g_calibration.slope;
                 g_calibration.updateWithSample(camera_timestamp_ticks, pc_ns, tick_frequency);
             }
@@ -513,12 +654,21 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
             ******************************************/
             metadata.width = ptrGrabResult->GetWidth();
             metadata.height = ptrGrabResult->GetHeight();
-            
-            GenApi::CEnumerationPtr pixelFormatNode(pBasler->GetNodeMap().GetNode("PixelFormat"));
-            if (GenApi::IsReadable(pixelFormatNode))
+
+            // PixelFormat is constant during a session — read it over GVCP only
+            // once instead of one network round-trip per frame.
+            static std::string cached_pixel_format;
+            if (cached_pixel_format.empty())
             {
-                std::string pixelFormatName = std::string(pixelFormatNode->GetCurrentEntry()->GetSymbolic());
-                metadata.pixelFormat = pixelFormatName;
+                GenApi::CEnumerationPtr pixelFormatNode(pBasler->GetNodeMap().GetNode("PixelFormat"));
+                if (GenApi::IsReadable(pixelFormatNode))
+                {
+                    cached_pixel_format = std::string(pixelFormatNode->GetCurrentEntry()->GetSymbolic());
+                }
+            }
+            if (!cached_pixel_format.empty())
+            {
+                metadata.pixelFormat = cached_pixel_format;
             }
 
             GenApi::INodeMap& chunkDataMap = ptrGrabResult->GetChunkDataNodeMap();
@@ -611,16 +761,32 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
 bool closeCamera()
 {
     std::cout << "[BaslerAdapter::"<<getName()<<"::closeCamera] Close camera requested." << std::endl;
-    // Deinitialize Basler
     if (pBasler)
     {
         endAcquisition();
-        pBasler->Close();
+        try
+        {
+            pBasler->Close();
+        }
+        catch (const Pylon::GenericException &e)
+        {
+            std::cerr << "[BaslerAdapter::"<<getName()<<"::closeCamera] Pylon exception closing: " << e.GetDescription() << std::endl;
+        }
+        catch (...)
+        {
+            std::cerr << "[BaslerAdapter::"<<getName()<<"::closeCamera] Unknown exception closing camera." << std::endl;
+        }
         pBasler.reset();
     }
 
-    // Releases all pylon resources. 
-    Pylon::PylonTerminate(); 
+    try
+    {
+        Pylon::PylonTerminate();
+    }
+    catch (...)
+    {
+        std::cerr << "[BaslerAdapter::"<<getName()<<"::closeCamera] Exception during PylonTerminate." << std::endl;
+    }
 
     return true;
 }

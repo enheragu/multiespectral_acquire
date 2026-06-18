@@ -1,0 +1,118 @@
+/* Multiespectral Acquire GUI — layout-specific styles.
+   Relies on CSS custom properties from /hitos_static/css/style.css */
+
+/* ── Acquisition status badge ────────────────────────────────────────── */
+.acq-status {
+    display: inline-flex; align-items: center; gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-radius: var(--radius); border: 1px solid var(--clr-border);
+    font-size: var(--txt-sm); font-weight: var(--txt-w-medium);
+    background: transparent; color: var(--clr-muted);
+    transition: color .2s, border-color .2s;
+    white-space: nowrap; min-height: 34px;
+}
+.acq-status::before {
+    content: ''; width: 9px; height: 9px; border-radius: 50%;
+    background: var(--clr-muted); flex-shrink: 0;
+    transition: background .2s;
+}
+.acq-status[data-status="recording"] {
+    color: var(--clr-success); border-color: var(--clr-success);
+}
+.acq-status[data-status="recording"]::before           { background: var(--clr-success); }
+.acq-status[data-status="recording-requested"] {
+    color: var(--clr-warning); border-color: var(--clr-warning);
+}
+.acq-status[data-status="recording-requested"]::before { background: var(--clr-warning); animation: pulse 1.5s infinite; }
+.acq-status[data-status="stop-requested"] {
+    color: var(--clr-info); border-color: var(--clr-info);
+}
+.acq-status[data-status="stop-requested"]::before      { background: var(--clr-info); animation: pulse 1.5s infinite; }
+
+/* ── Acquisition buttons ─────────────────────────────────────────────── */
+.btn-acq {
+    display: inline-flex; align-items: center; gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-lg);
+    border-radius: var(--radius); border: 1px solid transparent;
+    font-size: var(--txt-sm); font-weight: var(--txt-w-semibold); font-family: inherit;
+    cursor: pointer; transition: all .15s ease; min-height: 34px;
+    white-space: nowrap;
+}
+.btn-acq-start {
+    background: transparent; color: var(--clr-success); border-color: var(--clr-success);
+}
+.btn-acq-start:hover { background: var(--clr-success); color: #0d1117; transform: translateY(-1px); }
+
+.btn-acq-stop {
+    background: transparent; color: var(--clr-danger); border-color: var(--clr-danger);
+}
+.btn-acq-stop:hover  { background: var(--clr-danger); color: #ffffff; transform: translateY(-1px); }
+
+/* ── Stats bar — grid matching image columns ─────────────────────────── */
+.stats-bar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    background: var(--clr-surface); border: 1px solid var(--clr-border);
+    border-radius: var(--radius); margin-bottom: var(--spacing-lg);
+    box-shadow: var(--shadow-card); overflow: hidden;
+}
+.stat-group {
+    display: flex; justify-content: space-evenly; align-items: center;
+    padding: var(--spacing-lg) var(--spacing-xl);
+    gap: var(--spacing-xl);
+}
+.stat-group + .stat-group { border-left: 1px solid var(--clr-border); }
+
+.stat-item  { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.stat-label { font-size: var(--txt-2xs); color: var(--clr-muted); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+.stat-value { font-size: var(--txt-lg); font-weight: var(--txt-w-bold); color: var(--clr-primary); font-family: 'JetBrains Mono', 'Ubuntu Mono', monospace; }
+
+/* ── LIDAR visibility ────────────────────────────────────────────────── */
+.lidar-element { display: none; }
+/* Double-class specificity (0,2,0) beats .image-card (0,1,0), so this hides
+   the card even though .image-card sets display:flex later in the file. */
+.image-card.lidar-element { display: none; }
+.stat-group.lidar-element.lidar-visible { display: flex; }
+.image-card.lidar-element.lidar-visible { display: flex; }
+
+/* ── Camera image grid ───────────────────────────────────────────────── */
+.images-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: var(--spacing-lg);
+    margin-bottom: var(--spacing-xl);
+}
+.image-card {
+    background: var(--clr-surface); border-radius: var(--radius);
+    border: 1px solid var(--clr-border); box-shadow: var(--shadow-card);
+    overflow: hidden; display: flex; flex-direction: column;
+}
+
+/* Image card header: same visual weight as section card headers */
+.image-card-header {
+    background: var(--clr-card-header);
+    padding: var(--spacing-md) var(--spacing-lg);
+    border-bottom: 2px solid var(--clr-primary);
+    font-size: var(--txt-base); font-weight: var(--txt-w-semibold);
+    color: var(--clr-primary);
+    display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-md);
+}
+.image-card-body  { padding: var(--spacing-sm); background: var(--clr-bg); flex: 1; }
+.camera-img {
+    width: 100%; height: auto; display: block;
+    border-radius: 4px; object-fit: contain;
+    min-height: 80px; background: var(--clr-bg);
+}
+
+/* ── LIDAR topic select — inline in card header ──────────────────────── */
+.topic-select-inline {
+    font-size: var(--txt-xs); padding: 2px var(--spacing-md);
+    background: var(--clr-bg); color: var(--clr-muted);
+    border: 1px solid var(--clr-border); border-radius: 4px;
+    cursor: pointer; font-family: inherit; flex-shrink: 0;
+    max-width: 180px;
+}
+.topic-select-inline:focus {
+    outline: none; border-color: var(--clr-primary);
+    color: var(--clr-text);
+}

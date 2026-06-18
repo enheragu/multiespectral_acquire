@@ -1,31 +1,22 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(temperature_driver)
 
-find_package(catkin REQUIRED COMPONENTS
-  rospy
-  std_msgs
-  message_generation
+find_package(ament_cmake REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+find_package(std_msgs REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/TemperatureHumidity.msg"
+  DEPENDENCIES std_msgs
 )
 
-add_message_files(
-  FILES
-  TemperatureHumidity.msg
-)
-
-generate_messages(
-  DEPENDENCIES
-  std_msgs
-)
-
-catkin_package(
-  CATKIN_DEPENDS message_runtime std_msgs rospy
-)
-
-catkin_install_python(PROGRAMS
+install(PROGRAMS
   scripts/dht22_node.py
-  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 install(DIRECTORY launch/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch
+  DESTINATION share/${PROJECT_NAME}/launch
 )
+
+ament_package()

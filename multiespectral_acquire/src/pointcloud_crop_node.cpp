@@ -1,140 +1,153 @@
 /**
  * @file    pointcloud_crop_node.cpp
- * @brief   Crops pointcloud by FOV and republishes to _cropped topic
+ * @brief   Crops an Ouster point cloud to the camera vertical FOV and republishes
+ *          to <input>_cropped.
+ *
+ * Works on a DENSE (organized:false) cloud — a flat list of valid points with no
+ * row/col grid — so the crop can no longer slice a rectangle of the grid. Instead
+ * it filters by the per-point `ring` field (the physical beam index 0..N-1), which
+ * maps linearly to elevation. This is exact and convention-free.
+ *
+ * Horizontal FOV is NOT narrowed here: the Ouster azimuth_window already limits the
+ * scan to ~50° around the camera direction, a harmless margin over the ~27.5° camera
+ * FOV (points outside the image are dropped at projection time anyway). If a tight
+ * horizontal crop is ever needed, add a geometric azimuth filter and verify the FOV
+ * against the camera image (the azimuth-window centre is mounting-dependent).
  */
-
-#include <ros/ros.h>
-#include <sensor_msgs/PointCloud2.h>
 #include <cmath>
+#include <cstring>
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 
-class PointCloudCropNode {
-    ros::NodeHandle nh_;
-    ros::NodeHandle pnh_;
-    
-    ros::Subscriber sub_pointcloud_;
-    ros::Publisher pub_pointcloud_;
-    
+class PointCloudCropNode : public rclcpp::Node {
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_pointcloud_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr    pub_pointcloud_;
+
     std::string input_topic_;
     std::string output_topic_;
-    
-    bool fov_enabled_;
-    bool use_angular_;
-    int col_start_, col_end_;
-    int row_start_, row_end_;
-    double h_fov_min_deg_, h_fov_max_deg_;
+
+    bool   fov_enabled_;
     double v_fov_min_deg_, v_fov_max_deg_;
-    bool fov_computed_;
-    
+    double sensor_v_fov_deg_;
+
+    int  ring_start_ = -1, ring_end_ = -1;   // computed from v_fov on first cloud
+    int  ring_offset_ = -1;                   // byte offset of the `ring` field
+    bool layout_ready_ = false;
+
 public:
-    PointCloudCropNode() : nh_(), pnh_("~"), fov_computed_(false) {
-        // Parameters
-        pnh_.param<std::string>("input_topic", input_topic_, "/ouster/points");
-        
-        // Output topic is always input + "_cropped"
-        output_topic_ = input_topic_ + "_cropped";
-        
-        pnh_.param<bool>("fov_enabled", fov_enabled_, false);
-        
-        if (fov_enabled_) {
-            pnh_.param<bool>("fov_use_angular", use_angular_, false);
-            if (use_angular_) {
-                pnh_.param<double>("fov_h_min_deg", h_fov_min_deg_, -45.0);
-                pnh_.param<double>("fov_h_max_deg", h_fov_max_deg_, 45.0);
-                pnh_.param<double>("fov_v_min_deg", v_fov_min_deg_, -22.5);
-                pnh_.param<double>("fov_v_max_deg", v_fov_max_deg_, 22.5);
-                ROS_INFO("[PointCloudCropNode] Angular FOV: H[%.1f, %.1f], V[%.1f, %.1f]",
-                         h_fov_min_deg_, h_fov_max_deg_, v_fov_min_deg_, v_fov_max_deg_);
-            } else {
-                pnh_.param<int>("fov_col_start", col_start_, 0);
-                pnh_.param<int>("fov_col_end", col_end_, -1);
-                pnh_.param<int>("fov_row_start", row_start_, 0);
-                pnh_.param<int>("fov_row_end", row_end_, -1);
-                ROS_INFO("[PointCloudCropNode] Pixel FOV: cols[%d,%d], rows[%d,%d]",
-                         col_start_, col_end_, row_start_, row_end_);
+    PointCloudCropNode() : rclcpp::Node("pointcloud_crop_node") {
+        this->declare_parameter<std::string>("input_topic", "/ouster/points");
+        this->declare_parameter<bool>("fov_enabled", false);
+        this->declare_parameter<bool>("fov_use_angular", false);   // kept for launch compat
+        this->declare_parameter<double>("fov_h_min_deg", -45.0);   // (horizontal not cropped here)
+        this->declare_parameter<double>("fov_h_max_deg",  45.0);
+        this->declare_parameter<double>("fov_v_min_deg", -22.5);
+        this->declare_parameter<double>("fov_v_max_deg",  22.5);
+        // OS-0-128 has a 90° vertical FOV. (The old node hard-coded 45° — wrong for OS0.)
+        this->declare_parameter<double>("sensor_v_fov_deg", 90.0);
+
+        input_topic_      = this->get_parameter("input_topic").as_string();
+        output_topic_     = input_topic_ + "_cropped";
+        fov_enabled_      = this->get_parameter("fov_enabled").as_bool();
+        v_fov_min_deg_    = this->get_parameter("fov_v_min_deg").as_double();
+        v_fov_max_deg_    = this->get_parameter("fov_v_max_deg").as_double();
+        sensor_v_fov_deg_ = this->get_parameter("sensor_v_fov_deg").as_double();
+
+        pub_pointcloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(output_topic_, 1);
+        // BEST_EFFORT reader: compatible with BOTH the BEST_EFFORT raw /ouster/points
+        // and the compositor's RELIABLE republished _sync topic.
+        auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort();
+        sub_pointcloud_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+            input_topic_, qos,
+            std::bind(&PointCloudCropNode::pointcloud_cb, this, std::placeholders::_1));
+
+        RCLCPP_INFO(this->get_logger(),
+            "[PointCloudCropNode] %s -> %s | FOV crop: %s (vertical by ring, V[%.1f, %.1f] of %.0f°)",
+            input_topic_.c_str(), output_topic_.c_str(), fov_enabled_ ? "YES" : "NO",
+            v_fov_min_deg_, v_fov_max_deg_, sensor_v_fov_deg_);
+    }
+
+private:
+    // Locate the `ring` field and compute the beam-index window for the vertical FOV.
+    bool prepareLayout(const sensor_msgs::msg::PointCloud2& msg) {
+        const sensor_msgs::msg::PointField* ring = nullptr;
+        for (const auto& f : msg.fields) {
+            if (f.name == "ring") { ring = &f; break; }
+        }
+        if (!ring) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                "[PointCloudCropNode] no 'ring' field — passing cloud through uncropped");
+            return false;
+        }
+        ring_offset_ = static_cast<int>(ring->offset);
+
+        // Beams span sensor_v_fov_deg vertically; ring 0 = top (+elevation).
+        // Replicates the original row mapping: row=(v_half - elev)/v_fov * N.
+        // We don't know N until a cloud arrives, so derive it from the max ring seen
+        // (128 for OS0-128) — but the mapping only needs the fraction, applied to the
+        // beam count. Use the standard OS0-128 count of 128 unless overridden by data.
+        const double v_half = sensor_v_fov_deg_ / 2.0;
+        const int    n_beams = 128;   // OS-0-128
+        ring_start_ = static_cast<int>((v_half - v_fov_max_deg_) / sensor_v_fov_deg_ * n_beams);
+        ring_end_   = static_cast<int>((v_half - v_fov_min_deg_) / sensor_v_fov_deg_ * n_beams);
+        ring_start_ = std::max(0, std::min(ring_start_, n_beams - 1));
+        ring_end_   = std::max(0, std::min(ring_end_,   n_beams - 1));
+        if (ring_start_ > ring_end_) std::swap(ring_start_, ring_end_);
+
+        RCLCPP_INFO(this->get_logger(),
+            "[PointCloudCropNode] vertical FOV V[%.1f,%.1f] -> rings [%d, %d] (ring offset %d)",
+            v_fov_min_deg_, v_fov_max_deg_, ring_start_, ring_end_, ring_offset_);
+        layout_ready_ = true;
+        return true;
+    }
+
+    void pointcloud_cb(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg) {
+        if (!fov_enabled_) {
+            pub_pointcloud_->publish(*msg);
+            return;
+        }
+        if (!layout_ready_ && !prepareLayout(*msg)) {
+            pub_pointcloud_->publish(*msg);   // no ring field — passthrough
+            return;
+        }
+
+        const uint32_t ps = msg->point_step;
+        const size_t   n_in = (ps > 0) ? msg->data.size() / ps : 0;
+
+        sensor_msgs::msg::PointCloud2 out;
+        out.header       = msg->header;
+        out.fields       = msg->fields;
+        out.is_bigendian = msg->is_bigendian;
+        out.point_step   = ps;
+        out.height       = 1;
+        out.is_dense     = true;
+        out.data.resize(msg->data.size());   // upper bound; shrink after
+
+        const uint8_t* src = msg->data.data();
+        uint8_t*       dst = out.data.data();
+        size_t kept = 0;
+        for (size_t i = 0; i < n_in; ++i) {
+            const uint8_t* p = src + i * ps;
+            uint16_t ring;
+            std::memcpy(&ring, p + ring_offset_, sizeof(ring));
+            if (ring >= ring_start_ && ring <= ring_end_) {
+                std::memcpy(dst + kept * ps, p, ps);
+                ++kept;
             }
         }
-        
-        // Publishers/Subscribers
-        pub_pointcloud_ = nh_.advertise<sensor_msgs::PointCloud2>(output_topic_, 1);
-        sub_pointcloud_ = nh_.subscribe(input_topic_, 10, &PointCloudCropNode::pointcloud_cb, this);
-        
-        ROS_INFO("[PointCloudCropNode] Initialized. %s -> %s, FOV: %s",
-                 input_topic_.c_str(), output_topic_.c_str(), fov_enabled_ ? "YES" : "NO");
-    }
-    
-    void computePixelFOV(int width, int height) {
-        if (fov_computed_) return;
-        
-        // Ouster: 360° horizontal, ~45° vertical
-        double total_h_fov = 360.0;
-        double total_v_fov = 45.0;
-        
-        col_start_ = static_cast<int>((h_fov_min_deg_ + total_h_fov / 2.0) / total_h_fov * width);
-        col_end_ = static_cast<int>((h_fov_max_deg_ + total_h_fov / 2.0) / total_h_fov * width);
-        row_start_ = static_cast<int>((total_v_fov / 2.0 - v_fov_max_deg_) / total_v_fov * height);
-        row_end_ = static_cast<int>((total_v_fov / 2.0 - v_fov_min_deg_) / total_v_fov * height);
-        
-        col_start_ = std::max(0, std::min(col_start_, width - 1));
-        col_end_ = std::max(0, std::min(col_end_, width - 1));
-        row_start_ = std::max(0, std::min(row_start_, height - 1));
-        row_end_ = std::max(0, std::min(row_end_, height - 1));
-        
-        ROS_INFO("[PointCloudCropNode] Computed pixel FOV: cols[%d,%d], rows[%d,%d]",
-                 col_start_, col_end_, row_start_, row_end_);
-        fov_computed_ = true;
-    }
-    
-    void pointcloud_cb(const sensor_msgs::PointCloud2::ConstPtr& msg) {
-        if (!fov_enabled_) {
-            // No crop, just republish
-            pub_pointcloud_.publish(msg);
-            return;
-        }
-        
-        // Compute pixel FOV from angular on first message
-        if (use_angular_ && !fov_computed_) {
-            computePixelFOV(msg->width, msg->height);
-        }
-        
-        // Validate ranges
-        if (col_end_ < 0) col_end_ = msg->width - 1;
-        if (row_end_ < 0) row_end_ = msg->height - 1;
-        
-        if (col_start_ >= col_end_ || row_start_ >= row_end_ ||
-            col_end_ >= static_cast<int>(msg->width) || row_end_ >= static_cast<int>(msg->height)) {
-            ROS_WARN_THROTTLE(5.0, "[PointCloudCropNode] Invalid FOV bounds, publishing original");
-            pub_pointcloud_.publish(msg);
-            return;
-        }
-        
-        // Crop the pointcloud
-        sensor_msgs::PointCloud2 cropped;
-        cropped.header = msg->header;
-        cropped.height = row_end_ - row_start_;
-        cropped.width = col_end_ - col_start_;
-        cropped.fields = msg->fields;
-        cropped.is_bigendian = msg->is_bigendian;
-        cropped.point_step = msg->point_step;
-        cropped.row_step = cropped.width * msg->point_step;
-        cropped.is_dense = msg->is_dense;
-        
-        // Copy data row by row
-        cropped.data.resize(cropped.height * cropped.row_step);
-        for (int row = 0; row < static_cast<int>(cropped.height); ++row) {
-            int src_row = row_start_ + row;
-            const uint8_t* src_ptr = &msg->data[src_row * msg->row_step + col_start_ * msg->point_step];
-            uint8_t* dst_ptr = &cropped.data[row * cropped.row_step];
-            std::memcpy(dst_ptr, src_ptr, cropped.row_step);
-        }
-        
-        pub_pointcloud_.publish(cropped);
+
+        out.width    = static_cast<uint32_t>(kept);
+        out.row_step = static_cast<uint32_t>(kept * ps);
+        out.data.resize(kept * ps);
+        pub_pointcloud_->publish(out);
     }
 };
 
-int main(int argc, char **argv) {
-    ros::init(argc, argv, "pointcloud_crop_node");
-    ROS_INFO("[pointcloud_crop_node] Starting PointCloud Crop Node");
-    PointCloudCropNode node;
-    ros::spin();
+int main(int argc, char** argv) {
+    rclcpp::init(argc, argv);
+    RCLCPP_INFO(rclcpp::get_logger("pointcloud_crop_node"),
+                "[pointcloud_crop_node] Starting PointCloud Crop Node");
+    rclcpp::spin(std::make_shared<PointCloudCropNode>());
+    rclcpp::shutdown();
     return 0;
 }

@@ -24,15 +24,16 @@ The `dht22_PIO/` folder contains the PlatformIO project for the NodeMCU firmware
 ### Launch
 
 ```bash
-roslaunch temperature_driver dht22.launch
+ros2 launch temperature_driver dht22.launch.py
 ```
 
-**Parameters** (in `launch/dht22.launch`):
+**Parameters** (in `launch/dht22.launch.py`):
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `serial_port` | auto-detected | USB serial port |
+| `port` | `$DHT22_PORT` (empty → auto-detect) | USB serial port |
 | `baudrate` | `74880` | Serial baud rate |
-| `frame_id` | `dht22` | TF frame ID |
+| `frame_id` | `dht22_link` | TF frame ID |
+| `retry_interval` | `5.0` | Seconds between reconnect attempts |
 
 ### Message
 

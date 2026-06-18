@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-ROS node for reading temperature and humidity from ESP8266 + DHT22 via serial.
+ROS2 node for reading temperature and humidity from ESP8266 + DHT22 via serial.
 Automatically detects the serial port by looking for common ESP8266 USB chips.
 """
 
-import rospy
+import time
+import re
 import serial
 import serial.tools.list_ports
-import re
+
+import rclpy
+from rclpy.node import Node
+
 from temperature_driver.msg import TemperatureHumidity
 
 
@@ -20,137 +24,128 @@ ESP8266_USB_IDS = [
 ]
 
 
-def find_esp8266_port():
-    """
-    Auto-detect the ESP8266 serial port by USB VID:PID.
-    Returns the device path or None if not found.
-    """
+def find_esp8266_port(logger):
     ports = serial.tools.list_ports.comports()
-    
     for port in ports:
         for vid, pid in ESP8266_USB_IDS:
             if port.vid == vid and port.pid == pid:
-                rospy.loginfo(f"Found ESP8266 on {port.device} ({port.description})")
+                logger.info(f"Found ESP8266 on {port.device} ({port.description})")
                 return port.device
-    
+
     # Fallback: check dmesg for CH340/CP210x
     try:
         import subprocess
         dmesg = subprocess.check_output(['dmesg'], stderr=subprocess.DEVNULL, text=True)
-        # Look for CH340 or CP210x attached
         match = re.search(r'(ch34[0-9]|cp210x).*attached to (ttyUSB\d+)', dmesg, re.IGNORECASE)
         if match:
             port = f"/dev/{match.group(2)}"
-            rospy.loginfo(f"Found ESP8266 via dmesg on {port}")
+            logger.info(f"Found ESP8266 via dmesg on {port}")
             return port
     except Exception as e:
-        rospy.logwarn(f"dmesg fallback failed: {e}")
-    
+        logger.warn(f"dmesg fallback failed: {e}")
+
     return None
 
 
 def parse_sensor_data(line):
-    """
-    Parse the JSON-like format: {temperature:XX.XX, humidity:YY.YY}
-    Returns (temperature, humidity) tuple or None if parsing fails.
-    """
-    # Match the format from the ESP8266
     pattern = r'\{temperature:\s*([-\d.]+),\s*humidity:\s*([-\d.]+)\}'
     match = re.match(pattern, line.strip())
-    
     if match:
         try:
-            temp = float(match.group(1))
-            hum = float(match.group(2))
-            return (temp, hum)
+            return (float(match.group(1)), float(match.group(2)))
         except ValueError:
             return None
     return None
 
 
-class DHT22Node:
+class DHT22Node(Node):
     def __init__(self):
-        rospy.init_node('dht22', anonymous=False)
-        
-        # Parameters
-        self.port = rospy.get_param('~port', '')  # Empty = auto-detect
-        self.baudrate = rospy.get_param('~baudrate', 74880)
-        self.frame_id = rospy.get_param('~frame_id', 'dht22_link')
-        self.retry_interval = rospy.get_param('~retry_interval', 5.0)
-        
-        # Publisher
-        self.pub = rospy.Publisher('~data', TemperatureHumidity, queue_size=10)
-        
+        super().__init__('dht22')
+
+        self.declare_parameter('port', '')
+        self.declare_parameter('baudrate', 74880)
+        self.declare_parameter('frame_id', 'dht22_link')
+        self.declare_parameter('retry_interval', 5.0)
+
+        self.port = self.get_parameter('port').get_parameter_value().string_value
+        self.baudrate = self.get_parameter('baudrate').get_parameter_value().integer_value
+        self.frame_id = self.get_parameter('frame_id').get_parameter_value().string_value
+        self.retry_interval = self.get_parameter('retry_interval').get_parameter_value().double_value
+
+        self.pub = self.create_publisher(TemperatureHumidity, '~/data', 10)
         self.serial = None
-        
-    def connect(self):
-        """Establish serial connection, with auto-detection if needed."""
-        port = self.port
-        
+        self._next_retry = 0.0
+
+        # Poll at 10 Hz; the sensor sends at ~1 Hz but we want to drain the buffer promptly
+        self.timer = self.create_timer(0.1, self._timer_callback)
+
+    def _connect(self):
+        port = self.port or find_esp8266_port(self.get_logger())
         if not port:
-            port = find_esp8266_port()
-            if not port:
-                rospy.logwarn("ESP8266 not found, will retry...")
-                return False
-        
+            self.get_logger().warn("ESP8266 not found, will retry...")
+            return False
         try:
-            self.serial = serial.Serial(
-                port=port,
-                baudrate=self.baudrate,
-                timeout=2.0
-            )
-            rospy.loginfo(f"Connected to {port} @ {self.baudrate} baud")
+            self.serial = serial.Serial(port=port, baudrate=self.baudrate, timeout=2.0)
+            self.get_logger().info(f"Connected to {port} @ {self.baudrate} baud")
             return True
         except serial.SerialException as e:
-            rospy.logerr(f"Failed to open {port}: {e}")
+            self.get_logger().error(f"Failed to open {port}: {e}")
             return False
-    
-    def run(self):
-        """Main loop: read serial data and publish."""
-        rate = rospy.Rate(10)  # Check at 10Hz, sensor sends at 1Hz
-        
-        while not rospy.is_shutdown():
-            # Try to connect if not connected
-            if self.serial is None or not self.serial.is_open:
-                if not self.connect():
-                    rospy.sleep(self.retry_interval)
-                    continue
-            
-            try:
-                if self.serial.in_waiting > 0:
-                    line = self.serial.readline().decode('utf-8', errors='ignore')
-                    
-                    # Skip debug/status messages
-                    if 'ERROR' in line or '===' in line or 'Ready' in line:
-                        rospy.logdebug(f"ESP8266: {line.strip()}")
-                        continue
-                    
-                    data = parse_sensor_data(line)
-                    if data:
-                        msg = TemperatureHumidity()
-                        msg.header.stamp = rospy.Time.now()
-                        msg.header.frame_id = self.frame_id
-                        msg.temperature = data[0]
-                        msg.humidity = data[1]
-                        self.pub.publish(msg)
-                        rospy.logdebug(f"T={data[0]:.1f}°C, H={data[1]:.1f}%")
-                        
-            except serial.SerialException as e:
-                rospy.logerr(f"Serial error: {e}")
-                self.serial = None
-                rospy.sleep(self.retry_interval)
-            except Exception as e:
-                rospy.logerr(f"Unexpected error: {e}")
-            
-            rate.sleep()
-        
+
+    def _timer_callback(self):
+        if self.serial is None or not self.serial.is_open:
+            now = time.monotonic()
+            if now < self._next_retry:
+                return
+            if not self._connect():
+                self._next_retry = now + self.retry_interval
+                return
+
+        try:
+            if self.serial.in_waiting > 0:
+                line = self.serial.readline().decode('utf-8', errors='ignore')
+
+                if 'ERROR' in line or '===' in line or 'Ready' in line:
+                    log = self.get_logger().warn if 'ERROR' in line else self.get_logger().debug
+                    log(f"ESP8266: {line.strip()}")
+                    return
+
+                data = parse_sensor_data(line)
+                if data:
+                    msg = TemperatureHumidity()
+                    msg.header.stamp = self.get_clock().now().to_msg()
+                    msg.header.frame_id = self.frame_id
+                    msg.temperature = data[0]
+                    msg.humidity = data[1]
+                    self.pub.publish(msg)
+                    self.get_logger().debug(f"T={data[0]:.1f}°C, H={data[1]:.1f}%")
+
+        except serial.SerialException as e:
+            self.get_logger().error(f"Serial error: {e}")
+            if self.serial:
+                self.serial.close()
+            self.serial = None
+            self._next_retry = time.monotonic() + self.retry_interval
+        except Exception as e:
+            self.get_logger().error(f"Unexpected error: {e}")
+
+    def destroy_node(self):
         if self.serial and self.serial.is_open:
             self.serial.close()
+        super().destroy_node()
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = DHT22Node()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':
-    try:
-        node = DHT22Node()
-        node.run()
-    except rospy.ROSInterruptException:
-        pass
+    main()

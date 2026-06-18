@@ -57,9 +57,10 @@ public:
         double error_ns = pc_ns - predicted_pc_ns;
         double error_ms = error_ns / 1e6;
         
-        // DEBUG each 50 frames
+        // DEBUG print — keep rare: at 30 Hz (FLIR) every 50 frames meant a
+        // journald line every ~1.7 s, forever. 600 ≈ every 20 s at 30 Hz.
         static int debug_counter = 0;
-        if (++debug_counter % 50 == 0) {
+        if (++debug_counter % 600 == 0) {
             std::cout << "[" << camera_name << "::TimestampCalibration] cam_ticks=" << cam_ticks 
                     << ", cam_ns=" << cam_ns/1e9 << "s"
                     << ", pc_ns=" << pc_ns/1e9 << "s"
@@ -108,8 +109,8 @@ public:
                 recalculateSlope(is_systematic_drift);
             }
             
-            // Log every 100 samples
-            if (samples_count % 100 == 0) {
+            // Log every 1000 samples (~33 s at 30 Hz)
+            if (samples_count % 1000 == 0) {
                 std::cout << "[" << camera_name << "::TimestampCalibration] Adaptive #" << samples_count 
                           << " - Offset: " << offset_ns/1e6 << " ms"
                           << ", Slope: " << slope
@@ -253,14 +254,25 @@ public:
         // Apply exponential smoothing to slope changes
         double old_slope = slope;
         slope = (1.0 - base_alpha) * slope + base_alpha * new_slope;
-        
+
+        // Hard physical clamp: a camera crystal drifts <100 ppm, so any slope
+        // outside ±1000 ppm is estimation noise. Without this the drift
+        // detector could ratchet the slope upward (observed: 1.003 = 3000 ppm,
+        // settling into a permanent −40 ms equilibrium error).
+        slope = std::min(1.001, std::max(0.999, slope));
+
         // Update offset consistently with slope
         offset_ns = (1.0 - base_alpha) * offset_ns + base_alpha * new_offset;
-        
+
+        // The parameter jump invalidates the recent error history; keeping it
+        // would re-trigger the systematic-drift detector on stale errors and
+        // feed back into another recalculation.
+        recent_errors_ms->clear();
+
         // Log slope changes if significant
         if (std::abs(old_slope - slope) > 0.0001) {
-            std::cout << "[" << camera_name << "::TimestampCalibration] Slope adjusted: " 
-                      << old_slope << " -> " << slope 
+            std::cout << "[" << camera_name << "::TimestampCalibration] Slope adjusted: "
+                      << old_slope << " -> " << slope
                       << " (delta: " << (slope - old_slope) << ")"
                       << (aggressive ? " [AGGRESSIVE]" : "") << std::endl;
         }

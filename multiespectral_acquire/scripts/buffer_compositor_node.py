@@ -1,0 +1,395 @@
+#!/usr/bin/env python3
+"""
+Buffer compositor — runs all GenericBufferHandler instances in a single Python
+process instead of one process per handler.
+
+Memory saving: ~15 separate Python processes × ~50 MB each  →  1 process × ~120 MB.
+All handlers appear as normal nodes in the ROS graph (same names and namespaces).
+"""
+
+import os
+import sys
+import threading
+import yaml
+from pathlib import Path
+
+import rclpy
+from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+
+try:
+    # Event-driven executor: no wait-set rebuild over all entities per message.
+    # With 16 nodes in one process the MultiThreadedExecutor rebuilt a ~150-entity
+    # wait set ~90×/s, which dominated this process's CPU usage.
+    from rclpy.experimental.events_executor import EventsExecutor
+except ImportError:
+    EventsExecutor = None
+
+from std_msgs.msg import Bool, String
+from tf2_msgs.msg import TFMessage
+
+from buffer_handler_node import GenericBufferHandler
+
+_IMG  = 'multiespectral_acquire/msg/ImageWithMetadata'
+_IMG2 = 'sensor_msgs/msg/Image'
+_PC2  = 'sensor_msgs/msg/PointCloud2'
+_GPS  = 'sensor_msgs/msg/NavSatFix'
+_ODOM = 'nav_msgs/msg/Odometry'
+_TEMP = 'temperature_driver/msg/TemperatureHumidity'
+
+
+class BufferCompositor(Node):
+    """Reads compositor-level parameters and spawns all buffer handlers."""
+
+    def __init__(self):
+        super().__init__('buffer_compositor')
+
+        self.declare_parameter('output_path', '')
+        self.declare_parameter('main_trigger_topic', 'visible_camera/image_with_metadata')
+        self.declare_parameter('ouster_exposure_ns', 30000)
+        self.declare_parameter('gnss_topic',  '/gnss/fix')
+        self.declare_parameter('odom_topic',  '/odometry/combined')
+        self.declare_parameter('main_trigger_hz', 0.0)
+        self.declare_parameter('calibration_mode', False)
+
+        out         = self.get_parameter('output_path').value
+        main        = self.get_parameter('main_trigger_topic').value
+        oust_ns     = self.get_parameter('ouster_exposure_ns').get_parameter_value().integer_value
+        gnss        = self.get_parameter('gnss_topic').value
+        odom        = self.get_parameter('odom_topic').value
+        trigger_hz  = self.get_parameter('main_trigger_hz').get_parameter_value().double_value
+        self._calib = self.get_parameter('calibration_mode').get_parameter_value().bool_value
+        ns          = self.get_namespace()   # inherits /Multiespectral from launch group
+
+        self.get_logger().info(
+            f'BufferCompositor starting — ns={ns}, output_path={out}, '
+            f'calibration_mode={self._calib}')
+
+        # Common kwargs for Ouster sync buffers (time-window mode when trigger_hz > 0).
+        # buffer_max_size is a hard safety cap only; the active window is state-machine-managed.
+        # Ouster images ~10 Hz: cap 40 frames (~20 MB/type). Pointcloud cap 30 frames
+        # (~15 MB at ~500 KB/scan with azimuth_window active).
+        # use_raw: buffer serialized CDR bytes; only the matched message (~1 Hz)
+        # is deserialized. Saves the Python deserialization of every incoming
+        # message and stores compact bytes instead of Python message objects.
+        # clock_offset_topic: the Ouster runs TIME_FROM_INTERNAL_OSC (free clock);
+        # ouster_recal_node publishes the internal->wall offset. Handlers add it so
+        # the lidar lands on the same wall-clock timescale as the camera trigger.
+        # In calibration mode the _sync handlers store the FULL uncropped cloud /
+        # images directly (store_data=True) and the crop + _store path is skipped
+        # (crop nodes not launched, _store handlers not created below). In normal
+        # mode they only republish (store_data=False) and the cropped _store
+        # handlers write to disk.
+        _oust_store = self._calib
+        # The driver publishes RELIABLE in BOTH modes (lidar.launch sets
+        # use_system_default_qos=true), so read the cloud/images reliably here too:
+        # best-effort loses ~half the large fragmented samples intra-host, halving
+        # the rate the buffer can match against and doubling the camera↔lidar sync
+        # error (±50 → ±100 ms). Reliable keeps the full 10 Hz in the buffer for a
+        # tight match — in normal (1 Hz store) and calib (store-all) alike.
+        _oust_reliable = True
+        oust_img = dict(main_trigger_topic=main, max_time_diff=0.3,
+                        exposure_time_ns=oust_ns, store_data=_oust_store, use_raw=True,
+                        use_reliable_qos=_oust_reliable,
+                        clock_offset_topic='/ouster/clock_offset',
+                        expected_trigger_hz=trigger_hz, buffer_max_size=40)
+        oust_pc  = dict(main_trigger_topic=main, max_time_diff=0.3,
+                        exposure_time_ns=oust_ns, store_data=_oust_store, use_raw=True,
+                        use_reliable_qos=_oust_reliable,
+                        clock_offset_topic='/ouster/clock_offset',
+                        expected_trigger_hz=trigger_hz, buffer_max_size=30)
+
+        handler_defs = [
+            # ---- Cameras ----
+            ('buffer_visible', {                                   # store_all: buffer unused
+                'handler_type': 'image', 'message_type': _IMG,
+                'data_topic':   'visible_camera/image_with_metadata',
+                'output_path':  os.path.join(out, 'visible'),
+                'use_raw': True,
+            }),
+            ('buffer_lwir', {                                      # 30 Hz continuous
+                'handler_type': 'image', 'message_type': _IMG,
+                'data_topic':   'lwir_camera/image_with_metadata',
+                'main_trigger_topic': main, 'max_time_diff': 0.1,
+                'output_path':  os.path.join(out, 'lwir'),
+                'expected_trigger_hz': trigger_hz, 'buffer_max_size': 90,
+                # Pair by the FLIR's software-calibrated hardware timestamp
+                # (camera clock → wall-clock, like the Basler; verified ~-13 ms).
+                # The A68 can't PTP-lock, so flir_adapter falls back to that
+                # calibration and header.stamp is trustworthy — no need for the
+                # cruder arrival-time pairing.
+                'use_raw': True,
+            }),
+
+            # ---- Ouster sync buffers (sync only, no disk write) ----
+            ('buffer_range_sync', {
+                'handler_type': 'simple_image', 'message_type': _IMG2,
+                'data_topic':   '/ouster/range_image',
+                'sync_topic':   'ouster/range_image_sync',
+                'output_path':  os.path.join(out, 'lidar_range'), **oust_img,
+            }),
+            ('buffer_reflec_sync', {
+                'handler_type': 'simple_image', 'message_type': _IMG2,
+                'data_topic':   '/ouster/reflec_image',
+                'sync_topic':   'ouster/reflec_image_sync',
+                'output_path':  os.path.join(out, 'lidar_reflec'), **oust_img,
+            }),
+            ('buffer_signal_sync', {
+                'handler_type': 'simple_image', 'message_type': _IMG2,
+                'data_topic':   '/ouster/signal_image',
+                'sync_topic':   'ouster/signal_image_sync',
+                'output_path':  os.path.join(out, 'lidar_signal'), **oust_img,
+            }),
+            ('buffer_nearir_sync', {
+                'handler_type': 'simple_image', 'message_type': _IMG2,
+                'data_topic':   '/ouster/nearir_image',
+                'sync_topic':   'ouster/nearir_image_sync',
+                'output_path':  os.path.join(out, 'lidar_nearir'), **oust_img,
+            }),
+            ('buffer_pointcloud_sync', {
+                'handler_type': 'pointcloud', 'message_type': _PC2,
+                'data_topic':   '/ouster/points',
+                'sync_topic':   'ouster/points_sync',
+                'output_path':  os.path.join(out, 'lidar_pointcloud'),
+                **oust_pc,   # carries use_reliable_qos (calib-gated)
+            }),
+
+            # ---- Ouster store buffers (store_all, cropped) ----
+            ('buffer_range_store', {                               # store_all: buffer unused
+                'handler_type': 'simple_image', 'message_type': _IMG2,
+                'data_topic':   'ouster/range_image_sync_cropped',
+                'output_path':  os.path.join(out, 'lidar_range'),
+            }),
+            ('buffer_reflec_store', {
+                'handler_type': 'simple_image', 'message_type': _IMG2,
+                'data_topic':   'ouster/reflec_image_sync_cropped',
+                'output_path':  os.path.join(out, 'lidar_reflec'),
+            }),
+            ('buffer_signal_store', {
+                'handler_type': 'simple_image', 'message_type': _IMG2,
+                'data_topic':   'ouster/signal_image_sync_cropped',
+                'output_path':  os.path.join(out, 'lidar_signal'),
+            }),
+            ('buffer_nearir_store', {
+                'handler_type': 'simple_image', 'message_type': _IMG2,
+                'data_topic':   'ouster/nearir_image_sync_cropped',
+                'output_path':  os.path.join(out, 'lidar_nearir'),
+            }),
+            ('buffer_pointcloud_store', {
+                'handler_type': 'pointcloud', 'message_type': _PC2,
+                'data_topic':   'ouster/points_sync_cropped',
+                'output_path':  os.path.join(out, 'lidar_pointcloud'),
+            }),
+
+            # ---- Sensor buffers (tiny messages → generous limits) ----
+            ('buffer_gnss', {
+                'message_type': _GPS, 'data_topic': gnss,
+                'main_trigger_topic': main, 'max_time_diff': 1.5,
+                'output_path': os.path.join(out, 'gnss'),
+                'expected_trigger_hz': trigger_hz, 'buffer_max_size': 60,
+            }),
+            ('buffer_odom', {
+                'message_type': _ODOM, 'data_topic': odom,
+                'main_trigger_topic': main, 'max_time_diff': 1.5,
+                'output_path': os.path.join(out, 'odom'),
+                'expected_trigger_hz': trigger_hz, 'buffer_max_size': 120,
+            }),
+            ('buffer_dht22', {
+                'message_type': _TEMP, 'data_topic': '/dht22/data',
+                'main_trigger_topic': main, 'max_time_diff': 1.5,
+                'output_path': os.path.join(out, 'dht22'),
+                'expected_trigger_hz': trigger_hz, 'buffer_max_size': 60,
+            }),
+        ]
+
+        # Calibration: the cropped _store handlers are redundant (the _sync handlers
+        # store the full uncropped cloud/images and the crop nodes aren't launched).
+        # Drop them to avoid double-writing the same folders.
+        if self._calib:
+            handler_defs = [(n, p) for (n, p) in handler_defs
+                            if not n.endswith('_store')]
+        # Propagate the mode to every handler (enables intermediate-frame storage).
+        # store_raw: calib datasets save pixels as .npy (no PNG-encode CPU on the
+        # Pi — the encode would saturate it; moved to offline post-processing).
+        # Normal datasets stay PNG. Only the image store paths honour the flag.
+        for _name, _params in handler_defs:
+            _params['calibration_mode'] = self._calib
+            _params['store_raw'] = self._calib
+
+        self._handlers = []
+        for name, params in handler_defs:
+            try:
+                h = GenericBufferHandler(
+                    node_name=name, namespace=ns, param_overrides=params)
+                self._handlers.append(h)
+            except RuntimeError as e:
+                self.get_logger().error(f'Failed to create {name}: {e}')
+
+        self.get_logger().info(
+            f'BufferCompositor ready — {len(self._handlers)} handlers active')
+
+        # ---- TF static collection + auto-save on recording start ----
+        self._output_path = out
+        self._static_transforms = []
+        self._static_tf_lock = threading.Lock()
+
+        tf_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=100)
+        self._tf_static_sub = self.create_subscription(
+            TFMessage, '/tf_static', self._tf_static_cb, tf_qos)
+
+        # Ouster sensor metadata (beam intrinsics, column_window, data format).
+        # Saved once per session — required to parse the raw cloud .bin and to
+        # reconstruct XYZ from the range images. Latched (TRANSIENT_LOCAL).
+        self._ouster_metadata = None
+        meta_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1)
+        self._ouster_meta_sub = self.create_subscription(
+            String, '/ouster/metadata', self._ouster_meta_cb, meta_qos)
+
+        self._recording_sub = self.create_subscription(
+            Bool, 'recording_enabled', self._recording_cb, 10)
+
+        # ONE shared topic-status timer for all handlers, instead of 15 timers
+        # each dumping the full ROS graph every 2 s.
+        self._topic_check_timer = self.create_timer(2.0, self._check_topics_cb)
+
+    def _check_topics_cb(self):
+        for h in self._handlers:
+            try:
+                h.update_topic_status()
+            except Exception as e:
+                self.get_logger().warning(
+                    f'update_topic_status failed for {h.get_name()}: {e}')
+
+    def _tf_static_cb(self, msg):
+        with self._static_tf_lock:
+            for t in msg.transforms:
+                # Replace existing entry for same parent+child pair
+                self._static_transforms = [
+                    x for x in self._static_transforms
+                    if not (x['header']['frame_id'] == t.header.frame_id
+                            and x['child_frame_id'] == t.child_frame_id)
+                ]
+                self._static_transforms.append({
+                    'header': {
+                        'frame_id': t.header.frame_id,
+                        'stamp': t.header.stamp.sec + t.header.stamp.nanosec * 1e-9,
+                    },
+                    'child_frame_id': t.child_frame_id,
+                    'transform': {
+                        'translation': {
+                            'x': float(t.transform.translation.x),
+                            'y': float(t.transform.translation.y),
+                            'z': float(t.transform.translation.z),
+                        },
+                        'rotation': {
+                            'x': float(t.transform.rotation.x),
+                            'y': float(t.transform.rotation.y),
+                            'z': float(t.transform.rotation.z),
+                            'w': float(t.transform.rotation.w),
+                        },
+                    },
+                })
+
+    def _ouster_meta_cb(self, msg):
+        self._ouster_metadata = msg.data
+
+    def _recording_cb(self, msg):
+        if msg.data:
+            self._save_tf_static()
+            self._save_ouster_metadata()
+
+    def _save_ouster_metadata(self):
+        if not self._ouster_metadata:
+            self.get_logger().warning(
+                'Ouster metadata not received yet — skipping save')
+            return
+        try:
+            Path(self._output_path).mkdir(parents=True, exist_ok=True)
+            out_file = os.path.join(self._output_path, 'ouster_metadata.json')
+            with open(out_file, 'w') as f:
+                f.write(self._ouster_metadata)
+            self.get_logger().info(f'Saved Ouster metadata -> {out_file}')
+        except Exception as e:
+            self.get_logger().error(f'Failed to save Ouster metadata: {e}')
+
+    def _save_tf_static(self):
+        with self._static_tf_lock:
+            transforms = list(self._static_transforms)
+
+        if not transforms:
+            self.get_logger().warning('TF static: no transforms received yet — skipping save')
+            return
+
+        try:
+            Path(self._output_path).mkdir(parents=True, exist_ok=True)
+            out_file = os.path.join(self._output_path, 'tf_static.yaml')
+            with open(out_file, 'w') as f:
+                yaml.dump({'transforms': transforms}, f, default_flow_style=False)
+            self.get_logger().info(
+                f'Saved {len(transforms)} static transforms -> {out_file}')
+        except Exception as e:
+            self.get_logger().error(f'Failed to save tf_static: {e}')
+
+
+def main(args=None):
+    # Ensure buffer_handler_node.py is importable from the same scripts/ directory
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+    rclpy.init(args=args)
+
+    compositor = BufferCompositor()
+
+    if EventsExecutor is not None:
+        executor = EventsExecutor()
+        compositor.get_logger().info('Using EventsExecutor')
+    else:
+        executor = MultiThreadedExecutor()
+        compositor.get_logger().warning(
+            'EventsExecutor not available — falling back to MultiThreadedExecutor')
+    executor.add_node(compositor)
+    for handler in compositor._handlers:
+        executor.add_node(handler)
+
+    try:
+        # Resilient spin: an exception inside ONE callback must not take down
+        # the whole 16-node process. Log it and keep spinning.
+        while rclpy.ok():
+            try:
+                executor.spin()
+                break
+            except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
+                break
+            except Exception:
+                import traceback
+                compositor.get_logger().error(
+                    'Unhandled exception in callback (continuing):\n'
+                    + traceback.format_exc())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            for handler in compositor._handlers:
+                handler.destroy_node()
+            compositor.destroy_node()
+        except KeyboardInterrupt:
+            pass  # rclpy races SIGINT during destroy_when_not_in_use — harmless
+        except Exception as e:
+            import traceback
+            print(f'[buffer_compositor] Unexpected error during shutdown: {e}')
+            traceback.print_exc()
+        # try_shutdown: SIGINT/SIGTERM handlers may have shut the context down
+        # already; a second rclpy.shutdown() raises RCLError.
+        rclpy.try_shutdown()
+
+
+if __name__ == '__main__':
+    main()

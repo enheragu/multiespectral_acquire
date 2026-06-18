@@ -9,35 +9,57 @@ Generic Flask + SocketIO web interface for controlling any acquisition setup bui
 - Real-time frame rate and image count monitoring
 - Status badge (IDLE / RECORDING REQUESTED / RECORDING / STOP REQUESTED)
 
-## Preconfigured Variants
+## Launch
 
-| Variant | Port | Launch | Cameras |
-|---------|------|--------|---------|
-| Multiespectral | 5051 | `multiespectral_gui_launch.launch` | LWIR + Visible RGB |
-| Fisheye | 5052 | `fisheye_gui_launch.launch` | Frontal + Rear |
+The GUI is generic — camera names, topics, namespace and Flask port are all launch arguments. The package ships one launch file:
 
 ```bash
-# Multiespectral (port 5051)
-roslaunch multiespectral_acquire_gui multiespectral_gui_launch.launch
-
-# Fisheye (port 5052)
-roslaunch multiespectral_acquire_gui fisheye_gui_launch.launch
+ros2 launch multiespectral_acquire_gui multiespectral_gui_launch.launch.py
 ```
+
+| Argument | Default | Notes |
+|----------|---------|-------|
+| `flask_port` | `5000` | On HITOS the camera GUI is brought up on **5051** by `hitos_setup/camera_gui.launch.py` |
+| `flask_host` | `::` | Binds all interfaces (IPv6 + IPv4) |
+| camera topics / names | generic `camera1` / `camera2` placeholders | wired to the LWIR + Visible RGB sync topics at launch |
+
+> The legacy Husky deployment also ran a "fisheye" variant (frontal + rear) on port 5052; that configuration is not part of this package.
 
 ## Screenshots (multiespectral example)
 
-The GUI is **responsive** — adapts to desktop and mobile layouts:
+The GUI is **responsive** — adapts to desktop and mobile layouts, with light and dark themes. Desktop views show cameras side-by-side with status cards; on mobile the layout stacks vertically. The LIDAR panel appears dynamically only when the topic is available.
 
-<p align="center">
-  <img src="../media/desktop.png" width="48%" alt="GUI desktop view — cameras only" title="Desktop: dual camera view with status cards"/>
-  <img src="../media/desktop_lidar.png" width="48%" alt="GUI desktop view — cameras + LIDAR" title="Desktop: dual camera view with LIDAR panel enabled"/>
-</p>
-<p align="center">
-  <img src="../media/phone.png" width="24%" alt="GUI phone view — cameras only" title="Phone: vertical layout, cameras stacked"/>
-  <img src="../media/phone_lidar.png" width="24%" alt="GUI phone view — cameras + LIDAR" title="Phone: vertical layout with LIDAR panel"/>
-</p>
+### Desktop
 
-Desktop views show cameras side-by-side with status cards; on mobile the layout stacks vertically. The LIDAR panel appears dynamically only when the topic is available.
+<table>
+<tr>
+  <th align="center">Light theme</th>
+  <th align="center">Dark theme</th>
+</tr>
+<tr>
+  <td><img src="../media/acquisition_gui_desktop_light.png" width="420" alt="Acquisition GUI desktop — light"></td>
+  <td><img src="../media/acquisition_gui_desktop_dark.png" width="420" alt="Acquisition GUI desktop — dark"></td>
+</tr>
+</table>
+
+### Mobile
+
+<table>
+<tr>
+  <th colspan="2" align="center">Light theme</th>
+</tr>
+<tr>
+  <td><img src="../media/acquisition_gui_phone_light_1.png" width="160" alt="mobile light 1"></td>
+  <td><img src="../media/acquisition_gui_phone_light_2.png" width="160" alt="mobile light 2"></td>
+</tr>
+<tr>
+  <th colspan="2" align="center">Dark theme</th>
+</tr>
+<tr>
+  <td><img src="../media/acquisition_gui_phone_dark_1.png" width="160" alt="mobile dark 1"></td>
+  <td><img src="../media/acquisition_gui_phone_dark_2.png" width="160" alt="mobile dark 2"></td>
+</tr>
+</table>
 
 ## Dependencies
 
@@ -52,7 +74,7 @@ Key requirements: `flask`, `flask-socketio`, `opencv-python`, `numpy`, `pyyaml`.
 | Module | Description |
 |--------|-------------|
 | `multiespectral_control.py` | Main control logic (ROS ↔ Flask bridge) |
-| `multiespectral_ros_ac.py` | ROS action client for acquisition commands |
-| `multiespectral_dummy_ac.py` | Dummy action client for testing without hardware |
+| `multiespectral_ros_ac.py` | ROS node bridging the GUI to ROS — publishes/subscribes `recording_enabled` (`std_msgs/Bool`) and relays the camera image topics |
+| `multiespectral_dummy_ac.py` | Dummy stand-in for the above, to test the GUI without hardware |
 | `FreqCounter.py` | Utility for measuring topic publish rates |
-| `resource/` | HTML templates, CSS, JS for the web frontend |
+| `templates/`, `static/` | HTML templates and CSS/JS for the web frontend |

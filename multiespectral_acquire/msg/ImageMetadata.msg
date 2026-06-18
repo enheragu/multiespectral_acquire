@@ -1,5 +1,5 @@
 # Image metadata for multiespectral acquisition
-Header header  # ROS timestamp = camera_timestamp
+std_msgs/Header header  # ROS timestamp = camera_timestamp
 
 # Timestamps (all in nanoseconds)
 uint64 camera_timestamp       # Hardware timestamp from camera (PTP or calibrated)

@@ -1,33 +1,32 @@
 <?xml version="1.0"?>
-<package format="2">
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
   <name>multiespectral_acquire</name>
   <version>0.0.0</version>
-  <description>Package with FLIR-Basler drivers integrated into ROS1 to handle a multiespectral camera taking images from both cameras in a synchronized way.</description>
+  <description>Package with FLIR-Basler drivers integrated into ROS2 to handle a multiespectral camera taking images from both cameras in a synchronized way.</description>
   <maintainer email="enrique.he.ag@gmail.com">quique</maintainer>
   <license>TODO: License declaration</license>
 
-  <buildtool_depend>catkin</buildtool_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
 
-  <build_depend>roscpp</build_depend>
-  <build_depend>sensor_msgs</build_depend>
-  <build_depend>std_msgs</build_depend>
-  <build_depend>cv_bridge</build_depend>
-  <build_depend>image_transport</build_depend>
-  <build_depend>camera_info_manager</build_depend>
-  <build_depend>message_generation</build_depend>
-  <build_depend>opencv</build_depend>
-  <build_depend>yaml-cpp</build_depend>
+  <depend>rclcpp</depend>
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>image_transport</depend>
+  <depend>camera_info_manager</depend>
 
-  <exec_depend>roscpp</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>cv_bridge</exec_depend>
-  <exec_depend>image_transport</exec_depend>
-  <exec_depend>camera_info_manager</exec_depend>
-  <exec_depend>message_runtime</exec_depend>
-  <exec_depend>opencv</exec_depend>
-  <exec_depend>yaml-cpp</exec_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>rosidl_runtime_py</exec_depend>
+  <!-- Launch files read hitos_setup's Fast DDS SHM profile (config/fastdds_shm_profile.xml) -->
+  <exec_depend>hitos_setup</exec_depend>
+
+  <member_of_group>rosidl_interface_packages</member_of_group>
 
   <export>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>

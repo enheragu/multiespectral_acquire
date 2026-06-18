@@ -54,10 +54,16 @@ double camera_exposure_time_ns = 33333333; // (30Hz in nanoseconds)
 bool ptp_supported = false;
 bool force_disable_ptp = false;  // Set true to force manual calibration even if PTP available
 
+// Correction added to camera timestamps when PTP is active. Decided empirically
+// in beginAcquisition(): 0 if the camera clock is already UTC, -37 s if it runs
+// on the raw PTP/TAI timescale (matches ptp4l utc_offset=37 and the ouster
+// driver's ptp_utc_tai_offset=-37).
+int64_t g_ptp_correction_ns = 0;
+constexpr int64_t kUtcTaiOffsetNs = 37LL * 1000000000LL;
+
 // Global variable to store calibration
 TimestampCalibration g_calibration;
 
-std::string FLIR_IP = "192.168.4.6";
 
 /**
  * @brief Set the display name for the camera (typically the ROS node name)
@@ -276,7 +282,6 @@ bool initCamera(int frame_rate, std::string camera_ip)
 
     try
     {
-        // pFlir = flirCamList.GetByIndex(0);
         pFlir = flirCamList.GetBySerial("M0000726");
         CHECK_POINTER(pFlir);
         pFlir->Init();
@@ -293,6 +298,31 @@ bool initCamera(int frame_rate, std::string camera_ip)
         }
         pFlir->DeInit();
         pFlir->Init();
+
+        // Ensure heartbeat is enabled with a short timeout.
+        // Spinnaker debug mode can disable the heartbeat, causing the camera to stay
+        // locked until power-cycled after a crash. With a 3 s timeout the camera
+        // releases the control channel within seconds whenever this process dies.
+        try {
+            Spinnaker::GenApi::INodeMap& tlMap = pFlir->GetTLDeviceNodeMap();
+            // Known node names across Spinnaker versions and FLIR models:
+            for (const char* name : {"GevGVCPHeartbeatDisable", "GevHeartbeatDisable"}) {
+                Spinnaker::GenApi::CBooleanPtr n = tlMap.GetNode(name);
+                if (Spinnaker::GenApi::IsWritable(n)) {
+                    n->SetValue(false);
+                    std::cout << "[FlirAdapter::initCamera] Heartbeat enabled (" << name << ")." << std::endl;
+                    break;
+                }
+            }
+            Spinnaker::GenApi::CIntegerPtr pTimeout = tlMap.GetNode("GevHeartbeatTimeout");
+            if (Spinnaker::GenApi::IsWritable(pTimeout)) {
+                pTimeout->SetValue(3000);
+                std::cout << "[FlirAdapter::initCamera] Heartbeat timeout set to 3000 ms." << std::endl;
+            }
+        } catch (const Spinnaker::Exception& e) {
+            std::cerr << "[FlirAdapter::initCamera] Warning: could not configure heartbeat: "
+                      << e.what() << " (non-fatal)" << std::endl;
+        }
 
         // Continuous Acquisition
         // CHECK_ARW(pFlir->AcquisitionMode);
@@ -349,15 +379,72 @@ bool initCamera(int frame_rate, std::string camera_ip)
                 Spinnaker::GenApi::CEnumEntryPtr ptrPtpModeAutomatic = ptrPtpMode->GetEntryByName("Automatic");
                 ptrPtpMode->SetIntValue(ptrPtpModeAutomatic->GetValue());
                 std::cout << "[FlirAdapter::initCamera] PTP Mode: Automatic" << std::endl;
-                ptp_supported = true;
+
+                // Trust PTP only with EVIDENCE of an actual lock. The previous
+                // code set ptp_supported=true just because the node existed,
+                // and an unlocked A68 free-runs on camera uptime — observed
+                // 2026-06-12: 6 h in "Synchronizing" publishing uptime stamps.
+                // The A68 only steps its clock when achieving lock (typically
+                // when it boots with the grandmaster already present).
+                ptp_supported = false;
+                for (int i = 0; i < 10; ++i) {
+                    try {
+                        Spinnaker::GenApi::CCommandPtr latch = nodeMap.GetNode("ptpDataSetLatch");
+                        if (latch.IsValid() && Spinnaker::GenApi::IsWritable(latch)) latch->Execute();
+                        Spinnaker::GenApi::CEnumerationPtr servo = nodeMap.GetNode("ptpServoStatus");
+                        if (servo.IsValid() && Spinnaker::GenApi::IsReadable(servo)) {
+                            std::string st(servo->GetCurrentEntry()->GetSymbolic());
+                            if (i == 0 || i == 9)
+                                std::cout << "[FlirAdapter::initCamera] ptpServoStatus = " << st
+                                          << " (poll " << i+1 << "/10)" << std::endl;
+                            if (st == "Locked") { ptp_supported = true; break; }
+                        } else {
+                            break;  // no servo status node — cannot verify lock
+                        }
+                    } catch (...) { break; }
+                    std::this_thread::sleep_for(std::chrono::seconds(2));
+                }
+                std::cout << "[FlirAdapter::initCamera] PTP lock "
+                          << (ptp_supported ? "CONFIRMED — using hardware timestamps."
+                                            : "NOT confirmed — falling back to software calibration. "
+                                              "(A power cycle of the camera with the PTP master running usually locks it.)")
+                          << std::endl;
             }
         }
         catch (Spinnaker::Exception& e) {
-            std::cout << "[FlirAdapter::initCamera] Could not enable PTP: " << e.what() 
+            std::cout << "[FlirAdapter::initCamera] Could not enable PTP: " << e.what()
                       << ". Will use manual timestamp calibration." << std::endl;
             ptp_supported = false;
         }
-        
+
+        // --- PTP diagnostic dump (read-only, runs regardless of use_ptp) ---
+        // Logs what the camera itself reports about its PTP state so we can
+        // see, with the ptp4l grandmaster running, whether the A68 acts as
+        // Master / Listening / Slave and what offset it believes it has.
+        // ptpDataSetLatch is the standard latch command to refresh the
+        // readable PTP registers; it does not alter configuration.
+        {
+            try {
+                Spinnaker::GenApi::CCommandPtr latch = nodeMap.GetNode("ptpDataSetLatch");
+                if (latch.IsValid() && Spinnaker::GenApi::IsWritable(latch)) latch->Execute();
+            } catch (...) {}
+            const char* ptp_diag_nodes[] = {
+                "ptpEnable", "ptpMode", "ptpStatus", "ptpServoStatus",
+                "ptpOffsetFromMaster", "ptpMeanPropagationDelay",
+                "ptpClockID", "ptpParentClockID", "ptpGrandmasterClockID",
+                "PtpStatus", "PtpOffset", "PtpClockOperationMode"
+            };
+            for (const char* node_name : ptp_diag_nodes) {
+                try {
+                    Spinnaker::GenApi::CValuePtr v = nodeMap.GetNode(node_name);
+                    if (v.IsValid() && Spinnaker::GenApi::IsReadable(v)) {
+                        std::cout << "[FlirAdapter::initCamera][PTP-DIAG] " << node_name
+                                  << " = " << v->ToString() << std::endl;
+                    }
+                } catch (...) { /* node absent on this model — ignore */ }
+            }
+        }
+
         // Get and log camera model information
         getModelName();  // This populates model_name
         std::cout << "[" << getName() << "] Camera model: " << model_name << std::endl;
@@ -393,12 +480,50 @@ bool beginAcquisition()
         std::cout << "[FlirAdapter::beginAcquisition] Acquisition already started." << std::endl;
     }
     
+    // PTP timescale probe: even with a confirmed lock, the camera clock may be
+    // raw PTP/TAI (+37 s vs UTC) or already UTC. Decide with one test frame
+    // instead of assuming. Anything else = not actually synced → software cal.
+    if (ptp_supported)
+    {
+        try {
+            auto pc_before = std::chrono::system_clock::now();
+            pFlir->TriggerSoftware.Execute();
+            Spinnaker::ImagePtr probe = pFlir->GetNextImage(5000);
+            if (probe && !probe->IsIncomplete()) {
+                int64_t cam_ns = static_cast<int64_t>(probe->GetTimeStamp());
+                int64_t pc_ns  = pc_before.time_since_epoch().count();
+                int64_t diff   = cam_ns - pc_ns;
+                if (std::llabs(diff) < 5LL * 1000000000LL) {
+                    g_ptp_correction_ns = 0;
+                    std::cout << "[FlirAdapter::beginAcquisition] PTP timescale: UTC (diff "
+                              << diff / 1e6 << " ms). No correction." << std::endl;
+                } else if (std::llabs(diff - kUtcTaiOffsetNs) < 5LL * 1000000000LL) {
+                    g_ptp_correction_ns = -kUtcTaiOffsetNs;
+                    std::cout << "[FlirAdapter::beginAcquisition] PTP timescale: TAI (diff "
+                              << diff / 1e6 << " ms). Applying -37 s correction." << std::endl;
+                } else {
+                    std::cout << "[FlirAdapter::beginAcquisition] PTP claims lock but camera time is "
+                              << diff / 1e9 << " s off UTC — NOT trusting it, using software calibration." << std::endl;
+                    ptp_supported = false;
+                }
+            } else {
+                std::cout << "[FlirAdapter::beginAcquisition] PTP probe frame failed — using software calibration." << std::endl;
+                ptp_supported = false;
+            }
+            if (probe) probe->Release();
+        } catch (Spinnaker::Exception& e) {
+            std::cout << "[FlirAdapter::beginAcquisition] PTP probe exception: " << e.what()
+                      << " — using software calibration." << std::endl;
+            ptp_supported = false;
+        }
+    }
+
     // Software timestamp calibration if PTP not available
     if (!ptp_supported)
     {
         g_calibration = calibrateTimestamps(30);
     }
-    
+
     return true;
 }
 
@@ -553,14 +678,15 @@ bool acquireImage(cv::Mat& image, ImageMetadata& metadata)
             ***************************/
             // Get timestamp in nanoseconds (already in ns for FLIR)
             auto timestamp_nanoseconds = convertedImage->GetTimeStamp();
-            metadata.camera_timestamp = static_cast<uint64_t>(timestamp_nanoseconds);
+            metadata.camera_timestamp = static_cast<uint64_t>(
+                static_cast<int64_t>(timestamp_nanoseconds) + g_ptp_correction_ns);
             metadata.updateTimetag();
-                        
+
             // Apply software calibration if PTP not available
             if (!ptp_supported) {
-                int64_t pc_ns = (pc_start.time_since_epoch().count() + 
+                int64_t pc_ns = (pc_start.time_since_epoch().count() +
                                pc_end.time_since_epoch().count()) / 2;
-                metadata.camera_timestamp = g_calibration.offset_ns + 
+                metadata.camera_timestamp = g_calibration.offset_ns +
                                            timestamp_nanoseconds * g_calibration.slope;
                 g_calibration.updateWithSample(timestamp_nanoseconds, pc_ns, 1000000000LL);
             }

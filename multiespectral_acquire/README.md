@@ -1,148 +1,127 @@
 # multiespectral_acquire
 
-Generic ROS package for synchronized multi-sensor data acquisition: camera drivers, timestamp calibration, buffer-based synchronization and disk storage.
+ROS 2 package for synchronized multi-sensor data acquisition: GigE camera drivers, buffer-based temporal synchronization, FOV crop, and structured disk storage.
 
-The package is **hardware-agnostic** — any combination of cameras and sensors can be configured via launch files. Two example configurations are provided:
+The package is **hardware-agnostic** — any combination of cameras and sensors can be configured via launch files. Two configurations are active:
 
-| Configuration | Main | Followers | LIDAR pipeline |
+| Configuration | Trigger source | Followers | LiDAR pipeline |
 |---|---|---|---|
-| **Multiespectral** | Basler RGB (1 Hz) | FLIR LWIR (PTP), Ouster (cropped), GNSS, odom, DHT22 | 2-stage: sync → FOV crop → store |
-| **Fisheye** | Basler frontal (1 Hz) | Basler rear (4 Hz), Ouster (raw), GNSS, odom | Direct: sync → store |
+| **Multiespectral** | Basler RGB (1 Hz) | FLIR LWIR (software-cal), Ouster (internal-osc + recal, cropped), GNSS, odometry, DHT22 | sync → FOV crop → store |
+| **Fisheye** | Basler frontal (1 Hz) | Basler rear (4 Hz), Ouster (raw), GNSS, odometry | sync → store |
 
-## Driver Architecture (two-layer design)
+For the full HITOS hardware deployment (network topology, power, services) see [`hitos_setup/README.md`](../../hitos_setup/README.md).
 
-The C++ code is split into two layers so the core logic is **completely ROS-independent**:
-
-```
-src/
-├── camera_handler_node.cpp          ← ROS1 thin layer (pub/sub, timers, params)
-├── image_crop_node.cpp
-├── pointcloud_crop_node.cpp
-├── core/                            ← Layer 1 — NO ROS dependencies
-│   ├── camera_drivers/
-│   │   ├── camera_adapter.h/.cpp    ← Abstract base + free-function API
-│   │   ├── basler_adapter.cpp       ← Pylon SDK implementation
-│   │   ├── flir_adapter.cpp         ← Spinnaker SDK implementation
-│   │   └── dummy_adapter.cpp        ← Test stub (no hardware)
-│   └── utils/
-│       ├── logging_utils.h          ← Abstract Logger interface
-│       ├── image_metadata.h/.cpp    ← ImageMetadata struct + YAML serialization
-│       ├── timed_frame_buffer.h     ← Self-adjusting ring buffer
-│       └── timestamp_calibration.h  ← PTP/software timestamp calibration
-└── ros_utils/
-    └── ros_logger.h                 ← RosLogger : Logger → ROS_INFO/WARN/etc.
-```
-
-**Key design decisions:**
-
-- **Compile-time vendor selection** — CMake links exactly one of `basler_adapter.cpp`, `flir_adapter.cpp`, or `dummy_adapter.cpp` per executable. Each provides the same free-function set (`initCamera()`, `acquireImage()`, `beginAcquisition()`, etc.).
-- **`Logger` abstraction** — `core/utils/logging_utils.h` defines a pure-virtual `Logger` class. The ROS layer injects a `RosLogger` via `CameraAdapter::setLogger()`. The core never includes any ROS header.
-- **`ImageMetadata` bridge** — a plain C++ struct that carries timestamps, exposure, gain, etc. It has a `ROSTimeNowCallback` slot so the ROS layer can inject `ros::Time::now()` without the core depending on ROS.
-- **`CameraHandlerNode`** inherits `CameraAdapter` and adds only ROS plumbing: parameter reads, `image_transport` publishers, a `ros::Timer` callback that calls `grabImage()` and publishes.
-
-**Migration path (ROS1 → ROS2):** only `camera_handler_node.cpp` and `ros_logger.h` need to be rewritten. The entire `core/` layer remains unchanged.
+---
 
 ## Nodes
 
-### C++ Camera Drivers
+### Camera drivers (C++)
 
-| Executable | Source | Camera | SDK |
-|------------|--------|--------|-----|
-| `basler_camera_handler` | `src/core/camera_drivers/basler_adapter.cpp` | Basler acA1600-60gc (RGB) | Pylon |
-| `flir_camera_handler` | `src/core/camera_drivers/flir_adapter.cpp` | FLIR Boson (LWIR thermal) | Spinnaker |
-| `dummy_camera_handler` | `src/core/camera_drivers/dummy_adapter.cpp` | Test pattern | — |
+| Executable | Camera | SDK |
+|------------|--------|-----|
+| `basler_camera_handler` | Basler acA1600-60gc (RGB) | Pylon |
+| `flir_camera_handler` | FLIR A68 (LWIR thermal) | Spinnaker |
+| `dummy_camera_handler` | Synthetic test pattern | — |
 
-Each driver publishes `ImageWithMetadata` (`image` + `metadata` with hardware timestamp, exposure, gain, etc.) at a configurable frame rate via software trigger.
+Each driver publishes `ImageWithMetadata` at a configurable rate via software trigger.
 
-### C++ Crop Nodes
+### Crop nodes (C++)
 
 | Executable | Purpose |
 |------------|---------|
-| `pointcloud_crop_node` | Crops 3D point cloud by configurable FOV (angular or pixel-based) |
-| `image_crop_node` | Crops LIDAR 2D images (range, reflec, signal, nearir) by FOV |
+| `pointcloud_crop_node` | Crops 3D point cloud to a configurable FOV (angular or pixel-based) |
+| `image_crop_node` | Crops the four Ouster 2D image projections to the same FOV |
 
-### Python Buffer Handler
+### Buffer compositor (Python)
 
-`scripts/buffer_handler_node.py` is generic and type-agnostic (`rospy.AnyMsg`).
+`scripts/buffer_compositor_node.py` runs all buffer handler instances in a single process, saving ~15 × 50 MB vs one process per handler.
 
-It has two modes:
-1. **store_all** (no `main_topic`): republishes and optionally stores every incoming message.
-2. **sync** (with `main_topic`): aligns follower data to the main trigger timestamp.
+`scripts/buffer_handler_node.py` is the per-sensor logic. It has two modes:
 
-In **sync** mode it uses a simple double-buffer strategy:
-1. **Main buffer (`TimedBuffer`)**: thread-safe ring buffer with recent follower messages (starts at 100 frames).
-2. **Pending sync queue**: bounded queue (max 10) for main triggers that cannot be matched immediately.
+- **store_all** (no `main_topic`): publishes to `<topic>_sync` and stores every frame. The ring buffer exists but is never populated — no memory cost.
+- **sync** (with `main_topic`): aligns follower data to the main trigger timestamp. On each trigger it searches the ring buffer for the nearest match within `max_time_diff`. If not yet available it queues the request and retries on each new incoming message. Missed matches are dropped and the buffer grows automatically (bounded) when the main trigger consistently arrives late.
 
-Per main trigger:
-1. Computes target timestamp using exposure midpoint.
-2. Tries nearest match in main buffer within `max_time_diff`.
-3. If matched: republishes to `<topic>_sync` and optionally stores to disk (PNG/BIN + YAML).
-4. If not matched and buffer is already newer than target: drops that sync request (too late) and may grow main buffer (bounded) to absorb future late main arrivals.
-5. If not matched and buffer is not newer yet: enqueues request in pending queue and retries it on each new follower message.
-6. If pending queue is full: oldest pending request is dropped.
+#### Buffer sizing
 
-## Timestamp Synchronization
+Each sync handler has two configurable parameters:
 
-All sensors synchronize to the **visible camera (Basler)** as main reference. The sync point accounts for exposure:
+| Parameter | Role |
+|-----------|------|
+| `buffer_initial_size` | Starting `deque` maxlen — low idle RAM footprint |
+| `buffer_max_size` | Ceiling for the auto-grow mechanism |
 
-$$t_{sync} = t_{camera} + \frac{t_{exposure}}{2}$$
+The buffer needs to hold at least `rate_hz / trigger_hz` frames to cover one trigger interval, plus margin for periods where the master trigger is temporarily absent (e.g. camera respawn). Values set in `buffer_compositor_node.py`:
 
-### PTP Mode (preferred)
+| Handler | Topic rate | `initial` | `max` | Notes |
+|---------|-----------|-----------|-------|-------|
+| `buffer_lwir` | 30 Hz | 30 | 90 | 3 s coverage at 30 Hz |
+| `buffer_*_sync` (Ouster 2D images) | 10 Hz | 15 | 40 | hard safety cap; the active window is state-machine-managed |
+| `buffer_pointcloud_sync` | 10 Hz | 15 | 30 | dense cloud (`organized: false`) so message size is ≪ a full scan |
+| `buffer_odom` | ~50 Hz | 60 | 120 | Messages are small (~200 B) |
+| `buffer_gnss`, `buffer_dht22` | 5 Hz / 2 Hz | 20 | 60 | Byte-level messages |
 
-When a camera supports IEEE 1588 PTP and a PTP grandmaster is running on the network, the camera's hardware clock is synchronized directly. Timestamps are in the same time domain as the PC — no software correction needed.
+> **RPi 5 note:** running all handlers in one process at the above limits kept RSS under 550 MB in practice vs >1.4 GB with the previous flat cap of 120 for all handlers. The main driver was `buffer_pointcloud_sync`; running the Ouster in `organized: false` (dense cloud, valid points only — see the hub README) keeps that handler's footprint small.
 
-**Startup sanity check**: At `beginAcquisition()` the driver captures 10 samples and compares camera timestamps against PC time. If more than half exceed **5 seconds** difference (indicating PTP never locked), it automatically falls back to software calibration and logs a warning. This check runs once at startup since PTP failures are typically initialization problems, not mid-run issues.
+### Camera crash recovery
 
-### Software Calibration (fallback)
+Both camera drivers run with `respawn=True` (10 s delay), so a crash is recovered automatically. Combined with the GigE Vision heartbeat timeout — both drivers explicitly set `GevHeartbeatTimeout = 3000 ms` on camera open — the camera releases its control channel within 3 s of a crash and the next respawn connects cleanly.
 
-For cameras without PTP (e.g., Basler acA1600 via GigE):
+#### Unrecoverable corner case: permanent control-channel lock
 
-1. **Initial calibration** (startup): captures N samples (30 for Basler at ~1 Hz, 120 for FLIR at 30 Hz), fits a linear model via least-squares regression:
-   $$t_{PC} = \text{offset} + \text{slope} \times t_{camera}$$
-2. **Adaptive online calibration**: continuously refines offset (EMA, α=0.05) and slope (recalculated every 25 samples via regression on a sliding window of 50 samples)
-3. **Clock step detection**: if NTP/chrony suddenly adjusts the system clock, 3+ consecutive same-sign anomalies trigger an immediate offset correction (80%) instead of waiting for gradual EMA convergence
-4. **Drift detection**: if the error trend exceeds 2 ms/sample, slope recalculation becomes aggressive (every 10 samples, α=0.1)
+If Spinnaker's debug mode was active in a previous session it sets `GevGVCPHeartbeatDisable = true` on the FLIR A68, disabling the heartbeat entirely. The camera then stays locked to that dead session indefinitely — all subsequent `Init()` calls fail with `[-1005] ACCESS_DENIED` regardless of how long you wait. The respawn loop cannot escape this state.
 
-### PTP Setup (host side)
+**Only recovery: power-cycle the FLIR camera** (cut PoE or cycle the switch port). The next driver start re-enables the heartbeat and sets the 3 s timeout, so the issue will not recur within that session.
 
-```bash
-sudo apt install linuxptp
-ethtool -T <interface>  # Verify PTP support
+---
 
-# Run PTP grandmaster + sync system clock
-sudo ptp4l -i <interface> -m -S -f /etc/linuxptp/ptp4l.conf
-sudo phc2sys -c CLOCK_REALTIME -s <interface> -w -m
-```
+## Timestamp synchronization
 
-Example `ptp4l.conf`:
-```ini
-[global]
-gmCapable         1
-logSyncInterval   1
-logAnnounceInterval 1
-logMinDelayReqInterval 0
-```
+All sensors synchronize to the **visible camera (Basler)** as the main trigger. The sync point is the exposure midpoint:
 
-## Launch Files
+$$t_\text{sync} = t_\text{camera} + \frac{t_\text{exposure}}{2}$$
 
-| Launch | Description |
-|--------|-------------|
-| `multiespectral_launch.launch` | Main entry point: cameras + LIDAR crop + buffer handlers |
-| `multiespectral_buffer_handlers.launch` | All buffer handler instances (included by main launch) |
-| `multiespectral_lidar_crop.launch` | LIDAR FOV crop nodes (included by main launch) |
-| `fisheye_launch.launch` | Alternative configuration for fisheye cameras |
-| `fisheye_buffer_handlers.launch` | Buffer handlers for fisheye setup |
+### PTP mode (intended) — and why it falls back
 
-### Key Parameters
+PTP (IEEE 1588) was the intended design: each sensor locks its hardware clock to the RPi 5 grandmaster (`ptp4l` on `eth0`) so timestamps share the host time domain with no software correction. **On this rig PTP never locks** — the RPi 5 master is verified-perfect (pcap analysis), but neither the FLIR nor the Ouster reaches `Locked` behind the Mokerlink switch (see `hitos_setup` → Timestamp synchronization). So in practice:
+
+- **FLIR** (`lwir_use_ptp=true`) is **lock-aware**: at `beginAcquisition()` it reads `ptpServoStatus` and probes a frame against UTC; only if it is genuinely `Locked` does it trust the camera clock — otherwise (the current case) it falls back to **software calibration**.
+- **Ouster** runs `TIME_FROM_INTERNAL_OSC` (a free-running crystal); `hitos_setup/ouster_recal_node` maps it to wall-clock from the 100 Hz IMU — **not** PTP.
+
+### Software calibration (Basler)
+
+The Basler acA1600-60gc uses GigE trigger timestamps that drift from `CLOCK_REALTIME`. In the HITOS configuration `visible_use_ptp=false` so software calibration is always active:
+
+1. **Initial calibration** (startup): N samples (30 at 1 Hz), least-squares linear fit:
+   $$t_\text{PC} = \text{offset} + \text{slope} \times t_\text{camera}$$
+2. **Online refinement**: EMA on offset (α = 0.05), slope recalculated every 25 samples on a 50-sample sliding window.
+3. **NTP step detection**: 3+ consecutive same-sign anomalies trigger an immediate 80% offset correction instead of waiting for EMA convergence.
+4. **Drift detection**: error trend > 2 ms/sample switches to aggressive recalculation (every 10 samples, α = 0.1).
+
+---
+
+## Launch files
+
+| Launch file | Description |
+|-------------|-------------|
+| `multiespectral_launch.py` | Main entry point: camera drivers + FOV crop + buffer compositor |
+| `cameras_only.launch.py` | Camera drivers only (Basler visible + FLIR LWIR) |
+| `capture_sync.launch.py` | LiDAR crop nodes + buffer compositor (capture synchronization) |
+| `multiespectral_buffer_handlers.launch.py` | Buffer compositor node (included by `capture_sync` / main) |
+| `multiespectral_lidar_crop.launch.py` | LiDAR FOV crop nodes (included by `capture_sync` / main) |
+
+### Key parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `session_folder` | `test_session` | Name for the output folder |
-| `dataset_output_path` | `/media/administrator/data/images_eeha` | Base storage path |
+| `session_folder` | `test_session` | Output subfolder name |
+| `dataset_output_path` | `/tmp/multiespectral_data` | Base storage path. On HITOS `hitos_sync.service` overrides this to the external HDD (`/media/arvc/DATASETS/images_eeha`) |
 | `output_frame_rate` | `1` | Acquisition rate (Hz) |
-| `visible_use_ptp` | `false` | Enable PTP for Basler (needs hardware support) |
-| `lwir_use_ptp` | `true` | Enable PTP for FLIR Boson |
-| Buffer `max_time_diff` | `0.4` (LWIR), `0.3` (LIDAR) | Max sync tolerance (seconds) |
+| `calibration_mode` | `false` | `true` → store every frame uncropped, prefix the session dir `calib_` (vs `mult_`) and write raw `.npy`; for LiDAR↔camera calibration |
+| `visible_use_ptp` | `false` | Basler has no PTP — always software calibration |
+| `lwir_use_ptp` | `true` | Lock-aware PTP for the FLIR; falls back to software calibration when not `Locked` (the case on this rig) |
+| Buffer `max_time_diff` | `0.1 s` (LWIR), `0.3 s` (LiDAR) | Max sync tolerance |
+
+---
 
 ## Messages
 
@@ -150,17 +129,51 @@ logMinDelayReqInterval 0
 |---------|--------|
 | `ImageWithMetadata` | `sensor_msgs/Image image` + `ImageMetadata metadata` |
 | `ImageMetadata` | `camera_timestamp`, `exposure_time`, `half_exposure_timestamp`, `frame_counter`, `gain`, `width`, `height`, `pixel_format`, `timetag`, `img_name`, `img_pair_name`, `dataset_name` |
-| `TriggerStamp` | Trigger synchronization stamp |
 
-## Ouster LIDAR Images
+---
 
-The Ouster driver (`ouster_ros`, launched externally by `sensors_manager`) publishes 4 image representations per scan:
+## Ouster LiDAR images
+
+The Ouster driver publishes four 2D image projections per scan, all cropped by `image_crop_node` to the cameras' FOV before storage:
 
 | Type | Topic | Content |
 |------|-------|---------|
-| Range | `/ouster/range_image` | Depth map (distance per point) |
+| Range | `/ouster/range_image` | Per-point distance |
 | Reflectivity | `/ouster/reflec_image` | Laser return intensity |
-| Signal | `/ouster/signal_image` | Photon count / signal strength |
-| Near-IR | `/ouster/nearir_image` | Ambient infrared light |
+| Signal | `/ouster/signal_image` | Photon count |
+| Near-IR | `/ouster/nearir_image` | Ambient infrared |
 
-All are cropped by `image_crop_node` to match the cameras' FOV before storage.
+---
+
+## Driver architecture
+
+<details>
+<summary>Core/ROS separation (design notes)</summary>
+
+The C++ code splits into a ROS-independent core and a thin ROS 2 layer so vendor SDK logic is fully testable without a ROS environment:
+
+```
+src/
+├── camera_handler_node.cpp     ← ROS 2 thin layer (params, publishers, timer)
+├── image_crop_node.cpp
+├── pointcloud_crop_node.cpp
+├── core/                       ← No ROS dependencies
+│   ├── camera_drivers/
+│   │   ├── camera_adapter.h/.cpp   ← Abstract base + free-function API
+│   │   ├── basler_adapter.cpp      ← Pylon SDK
+│   │   ├── flir_adapter.cpp        ← Spinnaker SDK
+│   │   └── dummy_adapter.cpp       ← Test stub
+│   └── utils/
+│       ├── logging_utils.h         ← Pure-virtual Logger
+│       ├── image_metadata.h/.cpp   ← ImageMetadata + YAML serialization
+│       ├── timed_frame_buffer.h    ← Self-adjusting ring buffer
+│       └── timestamp_calibration.h ← PTP / software calibration
+└── ros_utils/
+    └── ros_logger.h            ← RosLogger : Logger → RCLCPP_INFO/WARN/etc.
+```
+
+- **Compile-time vendor selection**: CMake links exactly one of `basler_adapter.cpp`, `flir_adapter.cpp`, or `dummy_adapter.cpp` per executable.
+- **Logger abstraction**: `core/utils/logging_utils.h` defines a pure-virtual `Logger`. The ROS layer injects `RosLogger` via `CameraAdapter::setLogger()`.
+- **`ImageMetadata` bridge**: plain C++ struct with a `ROSTimeNowCallback` slot so the ROS layer can inject `rclcpp::Clock::now()` without the core including any ROS header.
+
+</details>
