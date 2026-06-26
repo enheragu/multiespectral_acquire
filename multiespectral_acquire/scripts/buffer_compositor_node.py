@@ -89,15 +89,41 @@ class BufferCompositor(Node):
         # error (±50 → ±100 ms). Reliable keeps the full 10 Hz in the buffer for a
         # tight match — in normal (1 Hz store) and calib (store-all) alike.
         _oust_reliable = True
+        # Calibration STORAGE rate caps. The SENSORS stay full-rate (cloud 10 Hz,
+        # LWIR 30 Hz) so the matched-frame sync is unaffected; only the on-disk
+        # rate of the dense intermediates is capped, and by TIME (store_max_hz in
+        # the handler) so it's robust to input-rate dips — stores min(input, cap),
+        # never a fixed fraction. Lidar bundle (cloud + 4 images) → 2 Hz, LWIR →
+        # 2 Hz, with the visible trigger at 1 Hz. Sized so calib recording fits the
+        # USB2 disk ceiling (~22 MB/s) with margin: ~16 MB/s, complete sets, no drops
+        # (the WD50NPZZ/JMS578 caps at ~22 in USB2-fallback; see disk notes).
+        _lidar_store_hz = 2.0 if self._calib else 0.0
+        _lwir_store_hz  = 2.0 if self._calib else 0.0
+        # Lidar FOV-scan-centre time offset, COMPUTED per cloud (not hardcoded).
+        # The Ouster stamps each frame at frame start (encoder 0°), but it sweeps
+        # the camera FOV partway into the 100 ms / 10 Hz rotation. The pointcloud
+        # handler computes (t_min+t_max)/2 of the valid points' per-point 't' field
+        # = WHEN it swept the FOV centre, and re-stamps the lidar by it — the exact
+        # analogue of the cameras' exposure-centre stamp (trigger + actual
+        # exposure/2). All Ouster handlers (cloud + 4 images, same sweep) apply it;
+        # the value is computed from the cloud and shared (images carry no per-point
+        # time). Removes the systematic cloud↔camera offset, leaving only the
+        # inherent ±50 ms 10 Hz quantization.
+        # Match the LIDAR to the camera's exposure CENTRE: no exposure_time_ns here,
+        # so the handler uses the trigger's metadata.exposure_time (sync target =
+        # camera_timestamp + exposure/2 = mid-exposure), consistent with the LWIR.
+        # (The old exposure_time_ns=ouster_exposure ≈ 30 µs matched exposure START.)
         oust_img = dict(main_trigger_topic=main, max_time_diff=0.3,
-                        exposure_time_ns=oust_ns, store_data=_oust_store, use_raw=True,
+                        store_data=_oust_store, use_raw=True,
                         use_reliable_qos=_oust_reliable,
                         clock_offset_topic='/ouster/clock_offset',
+                        apply_lidar_scan_offset=True, store_max_hz=_lidar_store_hz,
                         expected_trigger_hz=trigger_hz, buffer_max_size=40)
         oust_pc  = dict(main_trigger_topic=main, max_time_diff=0.3,
-                        exposure_time_ns=oust_ns, store_data=_oust_store, use_raw=True,
+                        store_data=_oust_store, use_raw=True,
                         use_reliable_qos=_oust_reliable,
                         clock_offset_topic='/ouster/clock_offset',
+                        apply_lidar_scan_offset=True, store_max_hz=_lidar_store_hz,
                         expected_trigger_hz=trigger_hz, buffer_max_size=30)
 
         handler_defs = [
@@ -114,6 +140,7 @@ class BufferCompositor(Node):
                 'main_trigger_topic': main, 'max_time_diff': 0.1,
                 'output_path':  os.path.join(out, 'lwir'),
                 'expected_trigger_hz': trigger_hz, 'buffer_max_size': 90,
+                'store_max_hz': _lwir_store_hz,
                 # Pair by the FLIR's software-calibrated hardware timestamp
                 # (camera clock → wall-clock, like the Basler; verified ~-13 ms).
                 # The A68 can't PTP-lock, so flir_adapter falls back to that

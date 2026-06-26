@@ -55,13 +55,16 @@ def generate_launch_description():
         # Centred ~-7° in this convention (≈ where the LiDAR's valid data sits);
         # whether that matches the camera forward is verified on the live image.
         # Centred ~forward within the (re-pointed) azimuth window's stripe-free
-        # region h[-13,+19.3]. H[-12,14] = ~26° centred +1°; V[-15,7] = 22° (V
-        # shifted down + top trimmed for the unmeasured lidar-camera pitch offset).
+        # region h[-13,+19.3]. H[-13.5,17] = ~30° centred +1.75° (max raised +3° so
+        # the images follow the cloud's wider right FOV — still inside the ~+19°
+        # stripe-free edge); V[-16,10] = 26° (V shifted down; top raised +3° for a
+        # bit more upward FOV — still trimmed vs the +45 sensor max for the
+        # unmeasured lidar-camera pitch offset).
         # Iterating against the live image; proper fix = measure the extrinsic.
         DeclareLaunchArgument('fov_h_min_deg',      default_value='-13.5'),
-        DeclareLaunchArgument('fov_h_max_deg',      default_value='14.0'),
+        DeclareLaunchArgument('fov_h_max_deg',      default_value='17.0'),
         DeclareLaunchArgument('fov_v_min_deg',      default_value='-16.0'),
-        DeclareLaunchArgument('fov_v_max_deg',      default_value='7.0'),
+        DeclareLaunchArgument('fov_v_max_deg',      default_value='10.0'),
 
         GroupAction(actions=[
             PushRosNamespace('Multiespectral'),

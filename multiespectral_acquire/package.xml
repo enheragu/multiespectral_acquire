@@ -21,8 +21,10 @@
   <exec_depend>rosidl_default_runtime</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
   <exec_depend>rosidl_runtime_py</exec_depend>
-  <!-- Launch files read hitos_setup's Fast DDS SHM profile (config/fastdds_shm_profile.xml) -->
-  <exec_depend>hitos_setup</exec_depend>
+  <!-- NOTE: launch files read hitos_setup's Fast DDS SHM profile by path at runtime
+       (get_package_share_directory). NOT an exec_depend — hitos_setup depends on
+       this package, so declaring it back creates a circular dependency. -->
+
 
   <member_of_group>rosidl_interface_packages</member_of_group>
 

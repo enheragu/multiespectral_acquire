@@ -177,6 +177,19 @@ class GenericBufferHandler(Node):
         # self-describing (dtype+shape in its header → np.load needs no sidecar).
         # The PNG-encode work moves to offline post-processing. Normal stays PNG.
         self.store_raw = bool(param_overrides.get('store_raw', False))
+        # Calibration storage rate cap, enforced by TIME (not by a fixed 1-in-N
+        # count): an intermediate is stored only if >= 1/store_max_hz has elapsed
+        # since the last stored frame (matched or intermediate). This targets a
+        # STABLE on-disk rate regardless of the sensor's input rate — at 10 Hz in
+        # with store_max_hz=5 it keeps ~every other frame, but if the sensor drops
+        # to 5 Hz it keeps ALL of them (still 5 Hz). A fixed 1-in-2 stride would
+        # instead halve a degraded 5 Hz input to 2.5 Hz. The sensors run full-rate
+        # (sync unaffected); only disk is capped. The matched/sync frame is always
+        # stored and resets the clock. 0 = uncapped (default / normal mode).
+        self._store_max_hz = float(param_overrides.get('store_max_hz', 0.0))
+        self._store_min_interval_ns = (int(1e9 / self._store_max_hz)
+                                       if self._store_max_hz > 0 else 0)
+        self._calib_last_stored_ns = 0
 
         # ---- Validation ----
         if not self.data_topic:
@@ -271,6 +284,17 @@ class GenericBufferHandler(Node):
         # We add it to every stamp (buffering + republish) so this source lands on
         # the same wall-clock timescale as the main trigger. Topic-agnostic.
         self._clock_offset_ns = 0
+        # FOV-scan-centre time offset for the spinning lidar, COMPUTED per cloud.
+        # The Ouster stamps each frame at frame start (encoder 0°) but sweeps the
+        # camera FOV partway into the 100 ms / 10 Hz rotation. The pointcloud handler
+        # computes (t_min+t_max)/2 of the valid points' per-point 't' field = when it
+        # imaged the FOV centre, the exact analogue of the cameras' exposure-centre
+        # stamp (trigger + exposure/2). The value is shared (class var) with the
+        # image handlers (same sweep, but Image msgs carry no per-point time). When
+        # applied, it shifts the lidar stamp used for matching AND stored, removing
+        # the systematic cloud↔camera offset. 0 for non-lidar handlers.
+        self._apply_scan_offset   = bool(param_overrides.get('apply_lidar_scan_offset', False))
+        self._compute_scan_offset = self._apply_scan_offset and self.handler_type == 'pointcloud'
         _clock_offset_topic = param_overrides.get('clock_offset_topic', '')
         if _clock_offset_topic:
             from std_msgs.msg import Float64
@@ -445,9 +469,11 @@ class GenericBufferHandler(Node):
         if self.stamp_from_arrival:
             timestamp_ns = self.get_clock().now().nanoseconds
         elif self.use_raw:
-            timestamp_ns = self._raw_stamp_ns(msg) + self._clock_offset_ns
+            timestamp_ns = (self._raw_stamp_ns(msg) + self._clock_offset_ns
+                            + self._fov_offset_ns)
         else:
-            timestamp_ns = self._get_timestamp_ns(msg) + self._clock_offset_ns
+            timestamp_ns = (self._get_timestamp_ns(msg) + self._clock_offset_ns
+                            + self._fov_offset_ns)
 
         if self.store_all:
             if self.sync_pub is not None:
@@ -644,8 +670,16 @@ class GenericBufferHandler(Node):
             if msg is None:
                 return
 
-        # Rewrite the stamp to wall-clock too, so downstream (crop) and storage
-        # see the corrected time, not the sensor's free-running clock.
+        # Refresh the shared lidar FOV-scan-centre offset from this cloud's per-point
+        # 't' (pointcloud handler only). Done here so the next stamp correction picks
+        # it up alongside the IMU clock offset.
+        if self._compute_scan_offset:
+            self._update_scan_offset(msg)
+
+        # Rewrite the stamp to wall-clock too, so downstream (crop) and storage see
+        # the corrected time. Adds BOTH corrections: the IMU-derived internal-osc ->
+        # wall clock offset (clock_offset_ns) AND the FOV-scan-centre offset
+        # (fov_offset_ns) — see _apply_clock_offset.
         self._apply_clock_offset(msg)
 
         if self.sync_pub is not None:
@@ -668,6 +702,10 @@ class GenericBufferHandler(Node):
         if self.calibration_mode and matched_ts_ns is not None:
             with self._calib_lock:
                 self._calib_prev_base = base_name
+            # The matched frame is always stored, so it also resets the storage-rate
+            # clock: the next batch's intermediates are spaced from this sync.
+            if self._store_min_interval_ns:
+                self._calib_last_stored_ns = matched_ts_ns
 
         # Eagerly free buffer data that future triggers can't use.
         # Cutoff = oldest still-pending trigger (or this sync) minus max_time_diff.
@@ -690,11 +728,53 @@ class GenericBufferHandler(Node):
                     f"[{self.data_topic}] Buffer shrunk to {new_size} "
                     f"after {self.buffer_shrink_threshold} consecutive syncs")
 
+    @property
+    def _fov_offset_ns(self):
+        """Lidar FOV-scan-centre offset to add to this handler's stamps (0 unless an
+        Ouster handler with the scan offset enabled). Reads the shared value computed
+        by the pointcloud handler from the cloud's per-point 't' field."""
+        return GenericBufferHandler._lidar_scan_offset_ns if self._apply_scan_offset else 0
+
+    def _update_scan_offset(self, pc2_msg):
+        """Compute (t_min+t_max)/2 of the cloud's valid points' per-point 't' (ns
+        from frame start) and publish it as the shared lidar FOV-scan-centre offset.
+        The lidar analogue of the cameras' exposure/2: it marks WHEN the sweep
+        crossed the FOV centre. Called only by the pointcloud handler on the matched
+        (already deserialized) cloud — one numpy pass at trigger rate."""
+        try:
+            t_off = x_off = None
+            for f in pc2_msg.fields:
+                if f.name == 't':   t_off = f.offset
+                elif f.name == 'x': x_off = f.offset
+            if t_off is None:
+                return
+            a = np.frombuffer(bytes(pc2_msg.data), dtype=np.uint8).reshape(-1, pc2_msg.point_step)
+            t = a[:, t_off:t_off + 4].copy().view(np.uint32).ravel()
+            if x_off is not None:                  # restrict to valid (non-zero) points
+                x = a[:, x_off:x_off + 4].copy().view(np.float32).ravel()
+                t = t[np.abs(x) > 0.01]
+            if t.size:
+                # The MIDDLE time of the FOV sweep = (t_min+t_max)/2, the exact
+                # analogue of the cameras' exposure/2 (centre of the capture
+                # interval, not the mean of the samples). Safe here: the dense cloud
+                # holds only real window returns (verified: t spans a tight ~44-58 ms
+                # with NO stray points), so the extremes are the true sweep edges.
+                GenericBufferHandler._lidar_scan_offset_ns = (int(t.min()) + int(t.max())) // 2
+                self._warn_throttle('scan_off_val', 20.0,
+                    f"[{self.data_topic}] lidar FOV-scan offset = "
+                    f"{GenericBufferHandler._lidar_scan_offset_ns / 1e6:.1f} ms (n={t.size})")
+        except Exception as e:
+            self._warn_throttle('scan_off', 10.0,
+                f"[{self.data_topic}] Failed to compute lidar scan offset: {e}")
+
     def _apply_clock_offset(self, msg):
-        """Shift header.stamp by the source clock offset (Ouster free clock -> wall),
-        in place. No-op when no offset is configured or the msg has no header."""
-        if self._clock_offset_ns and hasattr(msg, 'header'):
-            ns = self._stamp_to_ns(msg.header.stamp) + self._clock_offset_ns
+        """Shift header.stamp by the source clock offset (Ouster free clock -> wall)
+        plus the lidar FOV-scan-centre offset, in place, so the stored/republished
+        stamp matches what was used for buffering+matching. No-op when neither
+        offset is set or the msg has no header."""
+        if (self._clock_offset_ns or self._fov_offset_ns) and hasattr(msg, 'header'):
+            ns = (self._stamp_to_ns(msg.header.stamp) + self._clock_offset_ns
+                  + self._fov_offset_ns)
             msg.header.stamp.sec = ns // 1_000_000_000
             msg.header.stamp.nanosec = ns % 1_000_000_000
 
@@ -713,6 +793,10 @@ class GenericBufferHandler(Node):
         inter = sorted((e for e in snapshot if last < e['timestamp'] < matched_ts_ns),
                        key=lambda e: e['timestamp'])
         for i, entry in enumerate(inter, start=1):
+            if self._store_min_interval_ns and \
+               (entry['timestamp'] - self._calib_last_stored_ns) < self._store_min_interval_ns:
+                continue   # rate-capped (by time); kept frames keep their true _n
+            self._calib_last_stored_ns = entry['timestamp']
             data = entry['data']
             if self.use_raw and isinstance(data, (bytes, bytearray, memoryview)):
                 data = self._deserialize(data)
@@ -769,6 +853,11 @@ class GenericBufferHandler(Node):
     # Class-wide count of store jobs not yet finished (shared pool).
     _pending_stores = 0
     _pending_stores_lock = threading.Lock()
+
+    # Class-wide lidar FOV-scan-centre offset (ns), computed by the pointcloud
+    # handler from the cloud's per-point 't' field and shared with the image
+    # handlers (same sweep). All Ouster handlers run in one compositor process.
+    _lidar_scan_offset_ns = 0
 
     def store_message(self, msg, base_name):
         """Hand the (exclusively owned) message to the shared store pool.

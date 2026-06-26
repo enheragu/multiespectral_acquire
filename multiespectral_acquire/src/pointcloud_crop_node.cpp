@@ -54,9 +54,13 @@ public:
         sensor_v_fov_deg_ = this->get_parameter("sensor_v_fov_deg").as_double();
 
         pub_pointcloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(output_topic_, 1);
-        // BEST_EFFORT reader: compatible with BOTH the BEST_EFFORT raw /ouster/points
-        // and the compositor's RELIABLE republished _sync topic.
-        auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort();
+        // RELIABLE reader: the input is the compositor's RELIABLE republished
+        // `ouster/points_sync` (a ~1.6-3.8 MB cloud at the trigger rate). A
+        // best-effort reader silently dropped ~70% of those large samples (only
+        // ~0.3 Hz of 1 Hz reached the crop -> sparse stored dataset). Reliable
+        // delivers all of them. NOTE: only valid because the input is the reliable
+        // _sync; if ever pointed at the best-effort raw /ouster/points, revert.
+        auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
         sub_pointcloud_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
             input_topic_, qos,
             std::bind(&PointCloudCropNode::pointcloud_cb, this, std::placeholders::_1));
