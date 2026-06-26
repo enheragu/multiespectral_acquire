@@ -8,6 +8,24 @@ Generic metapackage for **synchronized multi-sensor data acquisition** on mobile
 | [multiespectral_acquire_gui](multiespectral_acquire_gui/) | Generic Flask + SocketIO web dashboard — start/stop recording, live camera feeds, frame-rate monitoring |
 | [temperature_driver](temperature_driver/) | DHT22 temperature/humidity sensor via NodeMCU (ESP8266) |
 
+## At a glance
+
+|  |  |
+|---|---|
+| **What** | Generic ROS 2 metapackage for **synchronized multi-sensor acquisition** (cameras + LiDAR + GNSS + odometry + temp) → structured per-frame datasets |
+| **Run** | `ros2 launch multiespectral_acquire multiespectral_launch.py session_folder:=<name>` (manual) · systemd on HITOS |
+| **Record** | toggle `/<namespace>/recording_enabled` (`Bool`), or the [web GUI](#web-gui) |
+| **Output** | `<path>/{mult,calib}_<session>/` — per-sensor subfolders + `tf_static.yaml` + `ouster_metadata.json` ([layout](#output-structure)) |
+| **On HITOS** | hardware, network, power & services → [`hitos_setup/README.md`](../hitos_setup/README.md) |
+
+## Contents
+
+- **[HITOS deployment](#hitos-deployment)** — key params, launch split, buffer/timestamp notes
+- **[Architecture](#architecture)** — ROS 2 dataflow (+ historical Husky / Fisheye, collapsed)
+- **[Quick Start](#quick-start)** · **[Web GUI](#web-gui)** — manual launch + recording control
+- **[Output Structure](#output-structure)** — on-disk dataset layout
+- **[Dependencies](#dependencies)**
+
 ---
 
 ## HITOS deployment
@@ -59,7 +77,9 @@ outside the azimuth window). This lets the Python compositor receive the cloud a
 
 ---
 
-## Architecture — HITOS Multiespectral (ROS 2)
+## Architecture
+
+_Historical Husky / Fisheye variants are collapsed below._
 
 ```mermaid
 flowchart LR
@@ -172,9 +192,9 @@ flowchart LR
 **Legend**: <span style="color:#4a90d9">blue</span> = C++ nodes · <span style="color:#5aa55a">green</span> = Python buffers · <span style="color:#c8a050">tan</span> = disk · <span style="color:#e6a040">orange dashed</span> = recording control · <span style="color:#e05050">red dashed</span> = master trigger · gray = external drivers / hardware
 
 <details>
-<summary>Alternative applications (ROS 1 era)</summary>
+<summary>Historical architecture diagrams (original Husky + Fisheye deployments)</summary>
 
-The package was originally deployed on an Ackermann/Husky robot. The architecture is identical — same driver/buffer/storage design — but without PTP or FOV crop. The GUI was a standalone Flask + SocketIO app (`multiespectral_acquire_gui`) on port 5051/5052.
+The package was originally deployed on an Ackermann/Husky robot with a different sensor suite. The architecture is analogous to HITOS — same driver/buffer/storage design — but without PTP or FOV crop. The GUI was a standalone Flask + SocketIO app (`multiespectral_acquire_gui`) on port 5051/5052.
 
 ### Multiespectral (Husky)
 
@@ -432,202 +452,3 @@ For per-package details see:
 - [multiespectral_acquire/README.md](multiespectral_acquire/README.md) — drivers, timestamp calibration, buffer synchronization, crash recovery
 - [multiespectral_acquire_gui/README.md](multiespectral_acquire_gui/README.md) — web dashboard for recording control and live monitoring
 - [temperature_driver/README.md](temperature_driver/README.md) — DHT22 sensor setup
-
----
-
-<details>
-<summary>Historical architecture diagrams (original Husky + Fisheye deployments)</summary>
-
-The package was originally deployed on an Ackermann/Husky robot with a different sensor suite. The architecture is analogous to HITOS — same driver/buffer/storage design — but without PTP or FOV crop.
-
-### Multiespectral (Husky)
-
-```mermaid
-flowchart LR
-    subgraph HW["Hardware"]
-        CAM_VIS["Basler RGB\n(GigE)"]
-        CAM_LWIR["FLIR Thermal\n(GigE)"]
-        LIDAR["Ouster LIDAR"]
-        DHT_HW["DHT22\n(NodeMCU · USB)"]
-        GNSS_HW["GNSS receiver"]
-        ODO_HW["Wheel encoders\n+ IMU"]
-    end
-
-    subgraph DRV["C++ Camera Drivers — core/ (ROS-independent)"]
-        direction TB
-        VIS_CORE["basler_adapter.cpp\n(Pylon SDK)"]
-        LWIR_CORE["flir_adapter.cpp\n(Spinnaker SDK)"]
-    end
-
-    subgraph ROS_DRV["ROS Thin Layer — camera_handler_node.cpp"]
-        VIS_NODE["basler_camera_handler"]
-        LWIR_NODE["flir_camera_handler"]
-    end
-
-    subgraph EXT["External ROS Drivers"]
-        OUSTER_DRV["Ouster driver\n(ouster_ros)"]
-        GNSS_DRV["GNSS driver"]
-        ODO_DRV["Odometry"]
-        DHT_NODE["dht22_node.py\n(temperature_driver)"]
-    end
-
-    subgraph CROP["C++ FOV Crop"]
-        PC_CROP["pointcloud_crop_node"]
-        IMG_CROP["image_crop_node ×4"]
-    end
-
-    subgraph BUF["Python Buffer Handlers — buffer_handler_node.py"]
-        B_VIS["Buffer Visible\n(store_all)"]
-        B_LWIR["Buffer LWIR"]
-        B_LIDAR["Buffer LIDAR ×5\n(sync → crop → store)"]
-        B_GNSS["Buffer GNSS"]
-        B_ODO["Buffer Odom"]
-        B_DHT["Buffer DHT22"]
-    end
-
-    subgraph DISK["Disk — configured_path / mult_session /"]
-        D_VIS[("visible/")]
-        D_LWIR[("lwir/")]
-        D_LIDAR[("lidar_range/ · lidar_reflec/\nlidar_signal/ · lidar_nearir/\nlidar_pointcloud/")]
-        D_GNSS[("gnss/")]
-        D_ODO[("odom/")]
-        D_DHT[("dht22/")]
-    end
-
-    subgraph CTRL["Control — GUI :5051"]
-        GUI["Web GUI"]
-        REC(["recording_enabled\nBool"])
-    end
-
-    CAM_VIS  --> VIS_CORE  --> VIS_NODE
-    CAM_LWIR --> LWIR_CORE --> LWIR_NODE
-    DHT_HW  --> DHT_NODE
-    GNSS_HW --> GNSS_DRV
-    ODO_HW  --> ODO_DRV
-    LIDAR   --> OUSTER_DRV
-    OUSTER_DRV --> PC_CROP & IMG_CROP
-
-    VIS_NODE  --> B_VIS
-    LWIR_NODE --> B_LWIR
-    PC_CROP & IMG_CROP --> B_LIDAR
-    GNSS_DRV  --> B_GNSS
-    ODO_DRV   --> B_ODO
-    DHT_NODE  --> B_DHT
-
-    VIS_NODE -.->|master trigger| B_LWIR
-    VIS_NODE -.->|master trigger| B_LIDAR
-    VIS_NODE -.->|master trigger| B_GNSS
-    VIS_NODE -.->|master trigger| B_ODO
-    VIS_NODE -.->|master trigger| B_DHT
-
-    B_VIS   --> D_VIS
-    B_LWIR  --> D_LWIR
-    B_LIDAR --> D_LIDAR
-    B_GNSS  --> D_GNSS
-    B_ODO   --> D_ODO
-    B_DHT   --> D_DHT
-
-    GUI --> REC
-    REC -.->|enable · disable| BUF
-
-    style HW       fill:#e8e8e8,stroke:#888,color:#333
-    style DRV      fill:#a8d5ff,stroke:#4a90d9,color:#1a3a5c
-    style ROS_DRV  fill:#c5e0f7,stroke:#4a90d9,color:#1a3a5c
-    style EXT      fill:#ddd,stroke:#999,color:#555
-    style CROP     fill:#a8d5ff,stroke:#4a90d9,color:#1a3a5c
-    style BUF      fill:#b8e6b8,stroke:#5aa55a,color:#1a3a1a
-    style DISK     fill:#f5deb3,stroke:#c8a050,color:#5a4010
-    style CTRL     fill:#ffcc99,stroke:#e6a040,color:#5a3510
-
-    linkStyle 17,18,19,20,21 stroke:#e05050,stroke-width:2,stroke-dasharray:5
-    linkStyle 29 stroke:#e6a040,stroke-width:2,stroke-dasharray:5
-```
-
-### Fisheye (Husky)
-
-```mermaid
-flowchart LR
-    subgraph HW["Hardware"]
-        CAM_FRONT["Basler Frontal\n(GigE)"]
-        CAM_REAR["Basler Rear\n(GigE)"]
-        LIDAR["Ouster LIDAR"]
-        GNSS_HW["GNSS receiver"]
-        ODO_HW["Wheel encoders\n+ IMU"]
-    end
-
-    subgraph DRV["C++ Camera Drivers — core/"]
-        VIS_CORE_F["basler_adapter.cpp"]
-        VIS_CORE_R["basler_adapter.cpp"]
-    end
-
-    subgraph ROS_DRV["ROS Thin Layer"]
-        FRONT_NODE["frontal_camera_handler"]
-        REAR_NODE["rear_camera_handler"]
-    end
-
-    subgraph EXT["External ROS Drivers"]
-        OUSTER_DRV["Ouster driver\n(ouster_ros)"]
-        GNSS_DRV["GNSS driver"]
-        ODO_DRV["Odometry"]
-    end
-
-    subgraph BUF["Python Buffer Handlers"]
-        B_FRONT["Buffer Frontal\n(store_all)"]
-        B_REAR["Buffer Rear"]
-        B_PC["Buffer Pointcloud"]
-        B_GNSS["Buffer GNSS"]
-        B_ODO["Buffer Odom"]
-    end
-
-    subgraph DISK["Disk — configured_path / pr_session /"]
-        D_FRONT[("frontal/")]
-        D_REAR[("rear/")]
-        D_PC[("pointcloud/")]
-        D_GNSS[("gnss/")]
-        D_ODO[("odom/")]
-    end
-
-    subgraph CTRL["Control — GUI :5052"]
-        GUI["Web GUI"]
-        REC(["recording_enabled\nBool"])
-    end
-
-    CAM_FRONT --> VIS_CORE_F --> FRONT_NODE
-    CAM_REAR  --> VIS_CORE_R --> REAR_NODE
-    GNSS_HW --> GNSS_DRV
-    ODO_HW  --> ODO_DRV
-    LIDAR   --> OUSTER_DRV
-
-    FRONT_NODE --> B_FRONT
-    REAR_NODE  --> B_REAR
-    OUSTER_DRV --> B_PC
-    GNSS_DRV   --> B_GNSS
-    ODO_DRV    --> B_ODO
-
-    FRONT_NODE -.->|master trigger| B_REAR
-    FRONT_NODE -.->|master trigger| B_PC
-    FRONT_NODE -.->|master trigger| B_GNSS
-    FRONT_NODE -.->|master trigger| B_ODO
-
-    B_FRONT --> D_FRONT
-    B_REAR  --> D_REAR
-    B_PC    --> D_PC
-    B_GNSS  --> D_GNSS
-    B_ODO   --> D_ODO
-
-    GUI --> REC
-    REC -.->|enable · disable| BUF
-
-    style HW      fill:#e8e8e8,stroke:#888,color:#333
-    style DRV     fill:#a8d5ff,stroke:#4a90d9,color:#1a3a5c
-    style ROS_DRV fill:#c5e0f7,stroke:#4a90d9,color:#1a3a5c
-    style EXT     fill:#ddd,stroke:#999,color:#555
-    style BUF     fill:#b8e6b8,stroke:#5aa55a,color:#1a3a1a
-    style DISK    fill:#f5deb3,stroke:#c8a050,color:#5a4010
-    style CTRL    fill:#ffcc99,stroke:#e6a040,color:#5a3510
-
-    linkStyle 12,13,14,15 stroke:#e05050,stroke-width:2,stroke-dasharray:5
-    linkStyle 22 stroke:#e6a040,stroke-width:2,stroke-dasharray:5
-```
-
-</details>

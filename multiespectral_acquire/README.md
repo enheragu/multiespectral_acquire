@@ -11,6 +11,8 @@ The package is **hardware-agnostic** — any combination of cameras and sensors 
 
 For the full HITOS hardware deployment (network topology, power, services) see [`hitos_setup/README.md`](../../hitos_setup/README.md).
 
+**Contents:** [Nodes](#nodes) · [Timestamp synchronization](#timestamp-synchronization) · [Launch files](#launch-files) · [Messages](#messages) · [Ouster LiDAR images](#ouster-lidar-images) · [Driver architecture](#driver-architecture)
+
 ---
 
 ## Nodes

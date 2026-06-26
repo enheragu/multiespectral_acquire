@@ -2,6 +2,8 @@
 
 Generic Flask + SocketIO web interface for controlling any acquisition setup built on `multiespectral_acquire`. Camera names, topics, port and namespace are all configurable via ROS parameters in the launch file.
 
+**Contents:** [Features](#features) · [Launch](#launch) · [Screenshots](#screenshots-multiespectral-example) · [Dependencies](#dependencies) · [Structure](#structure)
+
 ## Features
 
 - Start / stop recording via `/<namespace>/recording_enabled` topic
@@ -11,7 +13,7 @@ Generic Flask + SocketIO web interface for controlling any acquisition setup bui
 
 ## Launch
 
-The GUI is generic — camera names, topics, namespace and Flask port are all launch arguments. The package ships one launch file:
+The package ships one launch file:
 
 ```bash
 ros2 launch multiespectral_acquire_gui multiespectral_gui_launch.launch.py
