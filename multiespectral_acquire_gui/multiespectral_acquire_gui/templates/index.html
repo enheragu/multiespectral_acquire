@@ -109,7 +109,6 @@
                             <option value="{{ option.topic }}" {% if option.topic == current_lidar_topic %}selected{% endif %}>{{ option.label }}</option>
                         {% endfor %}
                     {% else %}
-                        <option value="/Multiespectral/ouster/range_image_cropped_sync">Range Image</option>
                         <option value="/Multiespectral/ouster/reflec_image_cropped_sync" selected>Reflectivity Image</option>
                         <option value="/Multiespectral/ouster/signal_image_cropped_sync">Signal Image</option>
                         <option value="/Multiespectral/ouster/nearir_image_cropped_sync">Near-IR Image</option>

@@ -12,6 +12,7 @@ import os
 import struct
 import yaml
 import threading
+import functools
 import importlib
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -32,6 +33,25 @@ from multiespectral_acquire.msg import ImageWithMetadata
 # out of the executor thread so high-rate ingestion callbacks are never blocked
 # behind a store burst after each trigger.
 _STORE_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix='store')
+
+
+def _guard(fn):
+    """Wrap an executor callback so a Python exception never escapes into the C++
+    EventsExecutor dispatch, where it would become a pybind11::error_already_set
+    -> std::terminate -> SIGABRT and take down the whole compositor process (all
+    handlers, all _sync republishes). Throttled so a persistent fault can't itself
+    flood the log. Ingestion callbacks are hot (30 Hz LWIR, 5×10 Hz Ouster), but a
+    try/except with no exception is essentially free."""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return fn(self, *args, **kwargs)
+        except Exception:
+            import traceback
+            self._warn_throttle('guard_' + fn.__name__, 10.0,
+                f"[{self.data_topic}] Unhandled exception in {fn.__name__} "
+                f"(continuing):\n{traceback.format_exc()}")
+    return wrapper
 
 # In-flight store jobs are bounded across ALL handlers (shared pool). Each
 # pending job pins its message in memory (a visible frame ~5.8 MB, a calib
@@ -159,6 +179,16 @@ class GenericBufferHandler(Node):
         # arrival time implicitly (ImageWithMetadata has no top-level header).
         self.stamp_from_arrival = bool(param_overrides.get('stamp_from_arrival', False))
         self.max_time_diff    = float(param_overrides.get('max_time_diff', 0.1))
+        # Dropped-frame fallback: if a trigger's NEAREST sensor frame never arrives
+        # (driver/sensor dropped it), the tight max_time_diff loses the trigger.
+        # After fallback_age_sec (> one sensor period) of waiting, accept the closest
+        # frame within fallback_max_time_diff (<= one period) instead of losing it.
+        # Normal triggers match the tight window first (the nearest frame arrives
+        # ~50 ms in), so only genuine drops reach the wider fallback — the tight
+        # offset is preserved. Disabled (None) unless set per-handler (Ouster).
+        _fb = param_overrides.get('fallback_max_time_diff', 0.0)
+        self.fallback_max_time_diff = float(_fb) if _fb else None
+        self.fallback_age_sec = float(param_overrides.get('fallback_age_sec', 0.13))
         self.exposure_time_ns = int(param_overrides.get('exposure_time_ns', 0))
         self.storage_path     = param_overrides.get('output_path', '')
         _sync_topic_override  = param_overrides.get('sync_topic', None)
@@ -262,10 +292,11 @@ class GenericBufferHandler(Node):
             self._recording_control_cb, 10)
 
         _reliable = param_overrides.get('use_reliable_qos', False)
+        _qos_depth = int(param_overrides.get('qos_depth', 10))
         data_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE if _reliable else ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=10)
+            depth=_qos_depth)
         # raw=True delivers serialized CDR bytes: no Python deserialization at
         # ingest rate (30 Hz LWIR, 5×10 Hz Ouster). Only the matched message
         # (trigger rate, ~1 Hz) is deserialized. Requires header-first message
@@ -311,6 +342,19 @@ class GenericBufferHandler(Node):
         # update_topic_status() — 15 per-handler timers each querying the ROS
         # graph every 2 s were pure overhead.
         self.topic_active = False
+
+        # Dataset-disk gate. The compositor probes the disk and latches
+        # /Multiespectral/disk_writable; when it's False we skip ALL disk writes so
+        # a missing/unmounted disk degrades to "republish only" (no ENODEV spam, no
+        # crash). Defaults True so a standalone handler (no compositor publishing
+        # the flag) behaves exactly as before.
+        self._disk_ok = True
+        _disk_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST, depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.create_subscription(
+            Bool, '/Multiespectral/disk_writable', self._disk_writable_cb, _disk_qos)
 
     # -------------------------------------------------------------------------
     # Internal helpers
@@ -434,9 +478,11 @@ class GenericBufferHandler(Node):
                 f"[{self.data_topic}] master {old_state} → {new_state} "
                 f"(window={new_window:.1f}s)")
 
+    @_guard
     def _clock_offset_cb(self, msg):
         self._clock_offset_ns = int(msg.data * 1e9)
 
+    @_guard
     def _recording_control_cb(self, msg):
         if not self.store_data:
             return
@@ -446,21 +492,54 @@ class GenericBufferHandler(Node):
         self.recording_enabled = msg.data
         if msg.data:
             if not self.storage_path_created:
-                try:
-                    Path(self.storage_path).mkdir(parents=True, exist_ok=True)
-                    self.storage_path_created = True
-                    self.get_logger().info(
-                        f"[{self.data_topic}] Created storage folder: {self.storage_path}")
-                except Exception as e:
-                    self.get_logger().error(
-                        f"[{self.data_topic}] Failed to create storage folder: {e}")
-                    self.recording_enabled = False
-                    return
-            self.get_logger().info(
-                f"[{self.data_topic}] Recording ENABLED -> {self.storage_path}")
+                self._try_create_storage_folder()
+            if self.storage_path_created:
+                self.get_logger().info(
+                    f"[{self.data_topic}] Recording ENABLED -> {self.storage_path}")
+            # If the disk isn't writable, recording_enabled stays True but
+            # storage_path_created is False: the store path skips (we keep
+            # republishing) and _disk_writable_cb creates the folder + resumes
+            # writing the moment the disk comes back.
         else:
             self.get_logger().info(f"[{self.data_topic}] Recording DISABLED")
 
+    def _try_create_storage_folder(self):
+        """Create the storage folder if the disk is writable. Never raises: on a
+        missing/unmounted disk it leaves storage_path_created=False (the store path
+        then skips) and the compositor's disk gate re-invokes this when the disk
+        returns. Throttled so a persistent outage doesn't flood the log."""
+        if not self._disk_ok:
+            self._warn_throttle('nodisk', 10.0,
+                f"[{self.data_topic}] NOT recording to disk — dataset disk not mounted/writable")
+            return
+        try:
+            Path(self.storage_path).mkdir(parents=True, exist_ok=True)
+            self.storage_path_created = True
+            self.get_logger().info(
+                f"[{self.data_topic}] Created storage folder: {self.storage_path}")
+        except Exception as e:
+            self._warn_throttle('mkdirfail', 10.0,
+                f"[{self.data_topic}] Failed to create storage folder: {e}")
+
+    @_guard
+    def _disk_writable_cb(self, msg):
+        ok = bool(msg.data)
+        if ok == self._disk_ok:
+            return
+        self._disk_ok = ok
+        if not ok:
+            # Disk went away mid-session: drop the folder flag so it is recreated
+            # (and writability re-confirmed) when the disk returns.
+            self.storage_path_created = False
+            self.get_logger().error(
+                f"[{self.data_topic}] Dataset disk unwritable — pausing disk writes "
+                f"(still republishing {self.sync_topic})")
+        else:
+            self.get_logger().info(f"[{self.data_topic}] Dataset disk writable again")
+            if self.recording_enabled and self.store_data and not self.storage_path_created:
+                self._try_create_storage_folder()
+
+    @_guard
     def _data_callback(self, msg):
         """msg is a deserialized message, or raw CDR bytes when use_raw=True."""
         if not self.topic_active:
@@ -485,9 +564,10 @@ class GenericBufferHandler(Node):
                         f"[{self.data_topic}] Failed to republish: {e}")
 
             if self.recording_enabled and self.store_data:
-                if not self.storage_path_created:
+                if not self._disk_ok or not self.storage_path_created:
                     self._warn_throttle('path', 5.0,
-                        f"[{self.data_topic}] Recording enabled but storage path not created yet")
+                        f"[{self.data_topic}] NOT storing — disk not ready "
+                        f"(writable={self._disk_ok}, folder={self.storage_path_created})")
                     return
                 if self.use_raw:
                     msg = self._deserialize(msg)
@@ -499,6 +579,7 @@ class GenericBufferHandler(Node):
             self.buffer.add(timestamp_ns, msg)
             self._retry_pending_sync_requests()
 
+    @_guard
     def _main_callback(self, msg):
         if not self.topic_active:
             return
@@ -573,6 +654,19 @@ class GenericBufferHandler(Node):
         for req in pending:
             match = self._find_sync_match(req['sync_timestamp'])
             if match is None:
+                if self.fallback_max_time_diff is not None and \
+                        (now_sec - req['created_sec']) >= self.fallback_age_sec:
+                    fb = self.buffer.find_closest(
+                        req['sync_timestamp'], self.fallback_max_time_diff)
+                    if fb is not None:
+                        self._process_matched_message(
+                            fb['data'], req['base_name'],
+                            sync_timestamp_ns=req['sync_timestamp'],
+                            matched_ts_ns=fb['timestamp'])
+                        self._log_throttle_count('fallback', 10.0, lambda n:
+                            f"[{self.data_topic}] Recovered {n} dropped-frame syncs "
+                            f"in last 10s via fallback window, last: '{req['base_name']}'")
+                        continue
                 diff_ns = self._get_closest_signed_diff_ns(req['sync_timestamp'])
                 if diff_ns is not None and diff_ns > 0:
                     self._maybe_grow_buffer_for_late_main(diff_ns)
@@ -692,9 +786,10 @@ class GenericBufferHandler(Node):
                     f"[{self.data_topic}] Could not republish sync: {e}")
 
         if self.recording_enabled and self.store_data:
-            if not self.storage_path_created:
+            if not self._disk_ok or not self.storage_path_created:
                 self._warn_throttle('path2', 5.0,
-                    f"[{self.data_topic}] Recording enabled but storage path not created yet")
+                    f"[{self.data_topic}] NOT storing — disk not ready "
+                    f"(writable={self._disk_ok}, folder={self.storage_path_created})")
             else:
                 self.store_message(msg, base_name)
 

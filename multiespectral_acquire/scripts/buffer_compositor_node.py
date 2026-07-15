@@ -9,6 +9,8 @@ All handlers appear as normal nodes in the ROS graph (same names and namespaces)
 
 import os
 import sys
+import time
+import functools
 import threading
 import yaml
 from pathlib import Path
@@ -31,6 +33,26 @@ from tf2_msgs.msg import TFMessage
 
 from buffer_handler_node import GenericBufferHandler
 
+
+def _guard(fn):
+    """Wrap an executor callback so a Python exception never escapes into the
+    EventsExecutor's C++ dispatch. Un-caught there it becomes a
+    pybind11::error_already_set -> std::terminate -> SIGABRT that kills the whole
+    compositor process (and every _sync republish with it). We log and continue
+    instead; the outer 'resilient spin' try/except CANNOT catch this because the
+    callback runs inside C++, not under the Python spin() frame."""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return fn(self, *args, **kwargs)
+        except Exception:
+            import traceback
+            self.get_logger().error(
+                f'Unhandled exception in {fn.__name__} (continuing):\n'
+                + traceback.format_exc())
+    return wrapper
+
+
 _IMG  = 'multiespectral_acquire/msg/ImageWithMetadata'
 _IMG2 = 'sensor_msgs/msg/Image'
 _PC2  = 'sensor_msgs/msg/PointCloud2'
@@ -52,6 +74,10 @@ class BufferCompositor(Node):
         self.declare_parameter('odom_topic',  '/odometry/combined')
         self.declare_parameter('main_trigger_hz', 0.0)
         self.declare_parameter('calibration_mode', False)
+        # When true, the 5 Ouster _sync handlers are dropped here — the C++
+        # ouster_sync_node republishes the same ouster/*_sync topics (no GIL, so it
+        # recovers the image yield the Python handlers dropped under load).
+        self.declare_parameter('disable_ouster_sync', False)
 
         out         = self.get_parameter('output_path').value
         main        = self.get_parameter('main_trigger_topic').value
@@ -60,6 +86,7 @@ class BufferCompositor(Node):
         odom        = self.get_parameter('odom_topic').value
         trigger_hz  = self.get_parameter('main_trigger_hz').get_parameter_value().double_value
         self._calib = self.get_parameter('calibration_mode').get_parameter_value().bool_value
+        _disable_oust = self.get_parameter('disable_ouster_sync').get_parameter_value().bool_value
         ns          = self.get_namespace()   # inherits /Multiespectral from launch group
 
         self.get_logger().info(
@@ -113,18 +140,18 @@ class BufferCompositor(Node):
         # so the handler uses the trigger's metadata.exposure_time (sync target =
         # camera_timestamp + exposure/2 = mid-exposure), consistent with the LWIR.
         # (The old exposure_time_ns=ouster_exposure ≈ 30 µs matched exposure START.)
-        oust_img = dict(main_trigger_topic=main, max_time_diff=0.3,
+        oust_img = dict(main_trigger_topic=main, max_time_diff=0.06,
                         store_data=_oust_store, use_raw=True,
                         use_reliable_qos=_oust_reliable,
                         clock_offset_topic='/ouster/clock_offset',
                         apply_lidar_scan_offset=True, store_max_hz=_lidar_store_hz,
-                        expected_trigger_hz=trigger_hz, buffer_max_size=40)
-        oust_pc  = dict(main_trigger_topic=main, max_time_diff=0.3,
+                        expected_trigger_hz=trigger_hz, buffer_max_size=40, qos_depth=40)
+        oust_pc  = dict(main_trigger_topic=main, max_time_diff=0.06,
                         store_data=_oust_store, use_raw=True,
                         use_reliable_qos=_oust_reliable,
                         clock_offset_topic='/ouster/clock_offset',
                         apply_lidar_scan_offset=True, store_max_hz=_lidar_store_hz,
-                        expected_trigger_hz=trigger_hz, buffer_max_size=30)
+                        expected_trigger_hz=trigger_hz, buffer_max_size=30, qos_depth=40)
 
         handler_defs = [
             # ---- Cameras ----
@@ -141,6 +168,7 @@ class BufferCompositor(Node):
                 'output_path':  os.path.join(out, 'lwir'),
                 'expected_trigger_hz': trigger_hz, 'buffer_max_size': 90,
                 'store_max_hz': _lwir_store_hz,
+                'use_reliable_qos': True, 'qos_depth': 40,
                 # Pair by the FLIR's software-calibrated hardware timestamp
                 # (camera clock → wall-clock, like the Basler; verified ~-13 ms).
                 # The A68 can't PTP-lock, so flir_adapter falls back to that
@@ -150,12 +178,8 @@ class BufferCompositor(Node):
             }),
 
             # ---- Ouster sync buffers (sync only, no disk write) ----
-            ('buffer_range_sync', {
-                'handler_type': 'simple_image', 'message_type': _IMG2,
-                'data_topic':   '/ouster/range_image',
-                'sync_topic':   'ouster/range_image_sync',
-                'output_path':  os.path.join(out, 'lidar_range'), **oust_img,
-            }),
+            # range removed: reconstructs EXACTLY from the pointcloud (range field,
+            # verified bit-for-bit). No sync/crop/store → saves ROS transport + USB.
             ('buffer_reflec_sync', {
                 'handler_type': 'simple_image', 'message_type': _IMG2,
                 'data_topic':   '/ouster/reflec_image',
@@ -183,11 +207,7 @@ class BufferCompositor(Node):
             }),
 
             # ---- Ouster store buffers (store_all, cropped) ----
-            ('buffer_range_store', {                               # store_all: buffer unused
-                'handler_type': 'simple_image', 'message_type': _IMG2,
-                'data_topic':   'ouster/range_image_sync_cropped',
-                'output_path':  os.path.join(out, 'lidar_range'),
-            }),
+            # range_store removed (reconstructed from the pointcloud in post-pro).
             ('buffer_reflec_store', {
                 'handler_type': 'simple_image', 'message_type': _IMG2,
                 'data_topic':   'ouster/reflec_image_sync_cropped',
@@ -230,12 +250,43 @@ class BufferCompositor(Node):
             }),
         ]
 
-        # Calibration: the cropped _store handlers are redundant (the _sync handlers
-        # store the full uncropped cloud/images and the crop nodes aren't launched).
-        # Drop them to avoid double-writing the same folders.
+        # Ouster _sync offloaded to the C++ ouster_sync_node (no GIL → recovers the
+        # image yield the GIL-bound Python dropped under the 5-stream firehose). Drop
+        # the 5 Python _sync handlers; the C++ node republishes the identical
+        # ouster/*_sync topics that the crop → _store chain consumes downstream. The
+        # _store handlers stay in Python (they read the cropped topics, ~1 Hz).
+        if _disable_oust:
+            _oust_sync = {'buffer_reflec_sync', 'buffer_signal_sync',
+                          'buffer_nearir_sync', 'buffer_pointcloud_sync'}
+            handler_defs = [(n, p) for (n, p) in handler_defs if n not in _oust_sync]
+
+        # Calibration storage. Crop nodes are NOT launched in calib, so the FULL
+        # uncropped cloud/images must be stored directly.
+        #   - C++ path (_disable_oust, the default): the C++ ouster_sync_node publishes
+        #     the uncropped ouster/*_sync but does NOT store. Keep the _store handlers
+        #     and repoint them from *_sync_cropped -> *_sync so they store the C++'s
+        #     uncropped output (store_all, .npy via store_raw below). PHASE 1: this
+        #     stores the trigger-MATCHED frames; the dense calib intermediates
+        #     (<base>_<n>, rate-capped) are a pending Phase 2 in the C++ node.
+        #   - Legacy Python path (_disable_oust false): the Python _sync handlers store
+        #     the uncropped directly, so the cropped _store handlers would double-write
+        #     -> drop them (the original behaviour).
         if self._calib:
-            handler_defs = [(n, p) for (n, p) in handler_defs
-                            if not n.endswith('_store')]
+            if _disable_oust:
+                for _n, _p in handler_defs:
+                    if _n.endswith('_store'):
+                        _dt = _p.get('data_topic', '')
+                        if _dt.endswith('_sync_cropped'):
+                            _p['data_topic'] = _dt[:-len('_cropped')]  # -> *_sync
+                            # The C++ ouster_sync_node publishes *_sync RELIABLE; the
+                            # uncropped clouds/images are large and BEST_EFFORT (the
+                            # _store default) drops them intra-host. Match RELIABLE +
+                            # deep queue so calib stores every matched frame.
+                            _p['use_reliable_qos'] = True
+                            _p['qos_depth'] = 40
+            else:
+                handler_defs = [(n, p) for (n, p) in handler_defs
+                                if not n.endswith('_store')]
         # Propagate the mode to every handler (enables intermediate-frame storage).
         # store_raw: calib datasets save pixels as .npy (no PNG-encode CPU on the
         # Pi — the encode would saturate it; moved to offline post-processing).
@@ -288,6 +339,98 @@ class BufferCompositor(Node):
         # each dumping the full ROS graph every 2 s.
         self._topic_check_timer = self.create_timer(2.0, self._check_topics_cb)
 
+        # ---- Dataset-disk health gate ----
+        # The dataset disk is an autofs automount (fstab x-systemd.automount): when
+        # the drive is absent the mount POINT still exists but any write fails with
+        # ENODEV. os.path.ismount() can't tell (it's True for the autofs stub even
+        # with nothing mounted underneath), so we probe with a real write. The
+        # result is latched on /Multiespectral/disk_writable — every handler gates
+        # its disk writes on it, so a missing disk degrades to "republish only"
+        # instead of spamming ENODEV or (via an un-caught error) crashing. We also
+        # publish a human-facing /Multiespectral/recording_status for the GUIs.
+        self._dataset_root = self._find_mount_root(out) if out else ''
+        self._disk_ok = None                 # None = not probed yet
+        self._recording_requested = False
+        _latched = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST, depth=1)
+        self._disk_pub   = self.create_publisher(Bool,   'disk_writable',    _latched)
+        self._status_pub = self.create_publisher(String, 'recording_status', _latched)
+        # The write-probe can block up to the autofs device-timeout (~5 s) when the
+        # drive is absent, so it runs in a DEDICATED thread — never on the executor
+        # thread, which must stay free to keep republishing the _sync topics.
+        # rclpy publishers are thread-safe. One synchronous probe first so the
+        # latched state is correct from the start.
+        self._update_disk_state()
+        self._disk_monitor_run = True
+        self._disk_thread = threading.Thread(target=self._disk_monitor_loop, daemon=True)
+        self._disk_thread.start()
+
+    def _disk_monitor_loop(self):
+        while self._disk_monitor_run and rclpy.ok():
+            time.sleep(5.0)
+            try:
+                self._update_disk_state()
+            except Exception:
+                import traceback
+                self.get_logger().error(
+                    'disk monitor error (continuing):\n' + traceback.format_exc())
+
+    @staticmethod
+    def _find_mount_root(path):
+        """First ancestor of `path` that is a mount point (the autofs stub for the
+        dataset disk counts — it IS the mount location, even when the real fs
+        underneath isn't mounted). Falls back to '/' if none is found."""
+        p = os.path.abspath(path)
+        while p != '/' and not os.path.ismount(p):
+            p = os.path.dirname(p)
+        return p
+
+    def _dataset_writable(self):
+        """True iff the dataset disk is really mounted AND accepting writes.
+        A real write is the only reliable probe: os.path.ismount() returns True for
+        the autofs stub, and ENODEV only surfaces on actual I/O. Never raises."""
+        root = self._dataset_root
+        if not root or root == '/':
+            return False if root == '/' else True   # '' → not configured, don't gate
+        probe = os.path.join(root, '.hitos_write_probe')
+        try:
+            with open(probe, 'wb') as f:
+                f.write(b'ok')
+            os.remove(probe)
+            return True
+        except Exception:
+            return False
+
+    def _update_disk_state(self):
+        ok = self._dataset_writable()
+        if ok != self._disk_ok:
+            self._disk_ok = ok
+            self._disk_pub.publish(Bool(data=ok))
+            if ok:
+                self.get_logger().info(
+                    f'Dataset disk WRITABLE ({self._dataset_root}) — recording to disk enabled')
+                # Re-save the session metadata skipped while the disk was down.
+                if self._recording_requested:
+                    self._save_tf_static()
+                    self._save_ouster_metadata()
+            else:
+                self.get_logger().error(
+                    f'Dataset disk NOT mounted/writable ({self._dataset_root}) — '
+                    'NOT recording to disk (topics still republished)')
+        self._publish_status()
+
+    def _publish_status(self):
+        if not self._recording_requested:
+            state = 'IDLE'
+        elif self._disk_ok:
+            state = 'RECORDING'
+        else:
+            state = 'NO_DISK'          # recording requested but disk unwritable
+        self._status_pub.publish(String(data=state))
+
+    @_guard
     def _check_topics_cb(self):
         for h in self._handlers:
             try:
@@ -296,6 +439,7 @@ class BufferCompositor(Node):
                 self.get_logger().warning(
                     f'update_topic_status failed for {h.get_name()}: {e}')
 
+    @_guard
     def _tf_static_cb(self, msg):
         with self._static_tf_lock:
             for t in msg.transforms:
@@ -326,13 +470,22 @@ class BufferCompositor(Node):
                     },
                 })
 
+    @_guard
     def _ouster_meta_cb(self, msg):
         self._ouster_metadata = msg.data
 
+    @_guard
     def _recording_cb(self, msg):
+        self._recording_requested = bool(msg.data)
         if msg.data:
-            self._save_tf_static()
-            self._save_ouster_metadata()
+            if self._disk_ok:
+                self._save_tf_static()
+                self._save_ouster_metadata()
+            else:
+                self.get_logger().error(
+                    'Recording requested but dataset disk NOT writable — nothing '
+                    'will be saved until the disk is mounted (see recording_status=NO_DISK)')
+        self._publish_status()
 
     def _save_ouster_metadata(self):
         if not self._ouster_metadata:

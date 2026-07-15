@@ -11,7 +11,7 @@ from launch.actions import (
 )
 from launch.conditions import UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import PushRosNamespace
 from launch_ros.substitutions import FindPackageShare
 
@@ -95,6 +95,15 @@ def generate_launch_description():
                     'odom_topic':        LaunchConfiguration('odom_topic'),
                     'main_trigger_hz':   frame_rate,
                     'calibration_mode':  LaunchConfiguration('calibration_mode'),
+                    # Rate-cap the C++ ouster_sync_node's calib intermediate PUBLISH to
+                    # the lidar bundle's on-disk budget (2 Hz in calib, matching the
+                    # compositor's _lidar_store_hz; 0.0 = uncapped/inert in normal). The
+                    # Python _store handlers store_all whatever the C++ publishes, so the
+                    # cap MUST live here or calib floods the USB2 disk (audit gap G2).
+                    'store_max_hz': PythonExpression([
+                        "'2.0' if '", LaunchConfiguration('calibration_mode'),
+                        "'.lower() in ('true', '1') else '0.0'",
+                    ]),
                 }.items(),
             ),
         ]),

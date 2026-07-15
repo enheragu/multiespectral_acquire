@@ -76,10 +76,16 @@ add_executable(image_crop_node src/image_crop_node.cpp)
 ament_target_dependencies(image_crop_node rclcpp sensor_msgs cv_bridge image_transport)
 target_link_libraries(image_crop_node ${OpenCV_LIBS})
 
+# ---- Ouster sync node ----
+add_executable(ouster_sync_node src/ouster_sync_node.cpp)
+ament_target_dependencies(ouster_sync_node rclcpp sensor_msgs std_msgs)
+target_link_libraries(ouster_sync_node "${cpp_typesupport_target}")
+
 # ---- Install ----
 install(TARGETS
   basler_camera_handler flir_camera_handler dummy_camera_handler
   pointcloud_crop_node image_crop_node
+  ouster_sync_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

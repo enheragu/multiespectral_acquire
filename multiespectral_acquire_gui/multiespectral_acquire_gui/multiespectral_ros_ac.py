@@ -10,7 +10,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, CompressedImage
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from cv_bridge import CvBridge, CvBridgeError
 
 from multiespectral_acquire.msg import ImageWithMetadata
@@ -41,13 +41,12 @@ class RosMultiespectralAcquire(Node):
         self.declare_parameter('camera2_name', 'Camera 2')
         self.declare_parameter('lidar_name', 'LIDAR Image')
         self.declare_parameter('lidar_topic_names', [
-            '/Multiespectral/ouster/range_image_sync_cropped_sync',
             '/Multiespectral/ouster/reflec_image_sync_cropped_sync',
             '/Multiespectral/ouster/signal_image_sync_cropped_sync',
             '/Multiespectral/ouster/nearir_image_sync_cropped_sync',
         ])
         self.declare_parameter('lidar_topic_labels', [
-            'Range Image', 'Reflectivity Image', 'Signal Image', 'Near-IR Image'
+            'Reflectivity Image', 'Signal Image', 'Near-IR Image'
         ])
 
         p = lambda name: self.get_parameter(name).get_parameter_value()
@@ -101,6 +100,20 @@ class RosMultiespectralAcquire(Node):
         self._recording_sub = self.create_subscription(
             Bool, self._recording_topic, self._recording_status_cb, 1)
 
+        # ---- Storage/disk status from the compositor ----
+        # The compositor is the only disk writer and knows the REAL state: IDLE /
+        # RECORDING / NO_DISK (recording requested but the dataset disk isn't
+        # mounted). Without this the GUI would show 'RECORDING' just because images
+        # flow, while every write silently fails with ENODEV. Latched.
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+        self._storage_status = ''
+        _st_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST, depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self._storage_status_sub = self.create_subscription(
+            String, '/Multiespectral/recording_status', self._storage_status_cb, _st_qos)
+
         # ---- Camera subscriptions (ImageWithMetadata) ----
         self._cam1_sub = self.create_subscription(
             ImageWithMetadata, camera1_topic, self._camera1_cb, 1)
@@ -138,6 +151,9 @@ class RosMultiespectralAcquire(Node):
         msg.data = enabled
         self._recording_pub.publish(msg)
         self.get_logger().info(f'Recording {"ENABLED" if enabled else "DISABLED"}')
+
+    def _storage_status_cb(self, msg):
+        self._storage_status = msg.data
 
     def _recording_status_cb(self, msg):
         if msg.data != self._recording_enabled:
@@ -330,7 +346,12 @@ class RosMultiespectralAcquire(Node):
             if self._lidar_available:
                 images_flowing = images_flowing or (li > prev_li)
 
-            if self._recording_enabled and images_flowing:
+            # NO_DISK from the compositor overrides everything: images may be
+            # flowing but NOTHING is being written. Make that unmissable.
+            storage_ok = (self._storage_status != 'NO_DISK')
+            if self._recording_enabled and not storage_ok:
+                status = '⚠ NO GRABA — disco no montado'
+            elif self._recording_enabled and images_flowing:
                 status = 'RECORDING'
             elif self._recording_enabled:
                 status = 'RECORDING REQUESTED'
@@ -346,6 +367,8 @@ class RosMultiespectralAcquire(Node):
                 'saved_frames_camera2':  self._saved_cam2,
                 'recording_enabled':   self._recording_enabled,
                 'recording_status':    status,
+                'storage_ok':          storage_ok,
+                'storage_status':      self._storage_status,
                 'frame_rate_camera1':  str(self._freq_cam1),
                 'frame_rate_camera2':  str(self._freq_cam2),
                 'lidar_available':     self._lidar_available,

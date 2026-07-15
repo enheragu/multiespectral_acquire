@@ -31,13 +31,7 @@ def generate_launch_description():
             output='screen',
             parameters=[{'input_topic': 'ouster/points_sync', **_fov_params(cfg)}],
         ),
-        Node(
-            package='multiespectral_acquire',
-            executable='image_crop_node',
-            name='range_image_crop',
-            output='screen',
-            parameters=[{'input_topic': 'ouster/range_image_sync', **_fov_params(cfg)}],
-        ),
+        # range_image_crop removed: range reconstructs exactly from the pointcloud.
         Node(
             package='multiespectral_acquire',
             executable='image_crop_node',
